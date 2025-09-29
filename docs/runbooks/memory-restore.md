@@ -77,3 +77,16 @@ re-initialization, and collaboration history replay.
     `reports/drills/` for auditing.
   - Review `reports/drills/history.jsonl` to track previous drill outcomes and
     ensure anomalies are investigated promptly.
+
+## Appendix A – Frontend Persistence Notes
+
+- The React `useKV` hook now keeps an in-memory cache authoritative whenever the
+  persistence API is unreachable. Failed hydration attempts no longer overwrite
+  populated knowledge arrays; the hook only falls back to defaults when no
+  memory is present.
+- When investigating suspected regressions, reproduce the offline scenario by
+  mocking `fetchPersistedValue` to resolve `undefined` and verify that
+  previously added entries remain visible.
+- Run `npx vitest run tests/hooks/useKV.test.tsx` to execute the dedicated hook
+  regression suite that covers both the offline fallback and successful server
+  hydration flows.
