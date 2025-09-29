@@ -1,0 +1,15 @@
+{
+  "timestamp": "20250916T225552Z",
+  "snapshot_source": null,
+  "status": "ok",
+  "anomaly_count": 0,
+  "anomalies": [],
+  "thresholds": {
+    "min_reward_ema": 0.12,
+    "max_avg_heat_delta": 2.5,
+    "max_heat": 3.0
+  },
+  "telemetry_report": "reports/drills/20250916T225552Z/telemetry.json",
+  "telemetry_markdown": "reports/drills/20250916T225552Z/telemetry.md",
+  "post_drill_snapshot": "reports/drills/20250916T225552Z/post-drill-snapshot.json"
+}

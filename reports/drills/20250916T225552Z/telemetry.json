@@ -1,0 +1,135 @@
+{
+  "generated_at": "2025-09-16T22:55:52.849624Z",
+  "config": {
+    "iterations": 4,
+    "batch_size": 3,
+    "degrade_interval": 2,
+    "ttl_floor": 16,
+    "heat_gain": 0.8,
+    "ttl_boost": 80
+  },
+  "samples": [
+    {
+      "label": "window-1",
+      "tick": 2,
+      "count": 4,
+      "reward_ema": 0.045000000000000005,
+      "avg_heat": 0.5745619684191443,
+      "max_heat": 0.766082624558859,
+      "territories": 0,
+      "frontier_size": 0,
+      "split_counter": 0,
+      "merge_counter": 0,
+      "avg_confidence": 0.48162499999999997,
+      "avg_novelty": 0.31453125000000004,
+      "avg_boredom": 0.015,
+      "avg_mass": 2.215,
+      "events": {
+        "territory_create": 4,
+        "register": 4,
+        "reinforce": 1
+      },
+      "reinforced_ids": [
+        "telemetry-beta",
+        "telemetry-gamma",
+        "telemetry-delta"
+      ]
+    },
+    {
+      "label": "window-2",
+      "tick": 3,
+      "count": 4,
+      "reward_ema": 0.08775000000000001,
+      "avg_heat": 1.124764394341947,
+      "max_heat": 1.499685859122596,
+      "territories": 0,
+      "frontier_size": 0,
+      "split_counter": 0,
+      "merge_counter": 0,
+      "avg_confidence": 0.5895575,
+      "avg_novelty": 0.2980859375,
+      "avg_boredom": 0.10500000000000001,
+      "avg_mass": 3.43,
+      "events": {
+        "reinforce": 1,
+        "degrade": 1
+      },
+      "reinforced_ids": [
+        "telemetry-gamma",
+        "telemetry-delta",
+        "telemetry-alpha"
+      ]
+    },
+    {
+      "label": "window-3",
+      "tick": 4,
+      "count": 4,
+      "reward_ema": 0.12836250000000002,
+      "avg_heat": 1.6516400424539373,
+      "max_heat": 2.2021867232719163,
+      "territories": 0,
+      "frontier_size": 0,
+      "split_counter": 0,
+      "merge_counter": 0,
+      "avg_confidence": 0.677059240625,
+      "avg_novelty": 0.2830882812500001,
+      "avg_boredom": 0.12000000000000001,
+      "avg_mass": 4.6450000000000005,
+      "events": {
+        "reinforce": 1
+      },
+      "reinforced_ids": [
+        "telemetry-delta",
+        "telemetry-alpha",
+        "telemetry-beta"
+      ]
+    },
+    {
+      "label": "window-4",
+      "tick": 5,
+      "count": 4,
+      "reward_ema": 0.166944375,
+      "avg_heat": 2.1561778916061662,
+      "max_heat": 2.2021867232719163,
+      "territories": 0,
+      "frontier_size": 0,
+      "split_counter": 0,
+      "merge_counter": 0,
+      "avg_confidence": 0.7472457124999999,
+      "avg_novelty": 0.26891328125,
+      "avg_boredom": 0.21000000000000002,
+      "avg_mass": 5.86,
+      "events": {
+        "reinforce": 1,
+        "degrade": 1
+      },
+      "reinforced_ids": [
+        "telemetry-alpha",
+        "telemetry-beta",
+        "telemetry-gamma"
+      ]
+    }
+  ],
+  "summary": {
+    "event_totals": {
+      "territory_create": 4,
+      "register": 4,
+      "reinforce": 4,
+      "degrade": 2
+    },
+    "heat_trend": {
+      "avg_delta": 1.581615923187022,
+      "max_delta": 1.4361040987130573
+    },
+    "final_reward_ema": 0.166944375,
+    "final_frontier": 0,
+    "territory_span": 0,
+    "thresholds": {
+      "min_reward_ema": 0.12,
+      "max_avg_heat_delta": 2.5,
+      "max_heat": 3.0
+    },
+    "anomalies": [],
+    "status": "ok"
+  }
+}

@@ -1,0 +1,150 @@
+{
+  "version": 1,
+  "tick": 5,
+  "mem": {
+    "telemetry-alpha": {
+      "text": "Baseline trace describing vacuum resonance calibration and reward decay.",
+      "embedding": null,
+      "metadata": null,
+      "territory_id": 10000,
+      "ttl": 16,
+      "last_touch_tick": 4,
+      "use_count": 3,
+      "mass": 5.86,
+      "heat": 2.2021867232719163,
+      "confidence": 0.7472457124999999,
+      "novelty": 0.2653531250000001,
+      "boredom": 0.26,
+      "inhibition": 0.1440796,
+      "frontier_hits": 0,
+      "pending_condense": false
+    },
+    "telemetry-beta": {
+      "text": "Queue management protocol for asynchronous reinforcement batches.",
+      "embedding": null,
+      "metadata": null,
+      "territory_id": 10001,
+      "ttl": 16,
+      "last_touch_tick": 4,
+      "use_count": 3,
+      "mass": 5.86,
+      "heat": 2.1724029913255682,
+      "confidence": 0.7472457124999999,
+      "novelty": 0.26675312500000004,
+      "boredom": 0.16,
+      "inhibition": 0.14313840800000002,
+      "frontier_hits": 0,
+      "pending_condense": false
+    },
+    "telemetry-gamma": {
+      "text": "Centroid drift notebook logging territory churn thresholds and splits.",
+      "embedding": null,
+      "metadata": null,
+      "territory_id": 10002,
+      "ttl": 16,
+      "last_touch_tick": 4,
+      "use_count": 3,
+      "mass": 5.86,
+      "heat": 2.141300620911151,
+      "confidence": 0.7472457124999999,
+      "novelty": 0.27819375,
+      "boredom": 0.26,
+      "inhibition": 0.142178008,
+      "frontier_hits": 0,
+      "pending_condense": false
+    },
+    "telemetry-delta": {
+      "text": "Condensation heuristics for semantic clustering during focus recovery.",
+      "embedding": null,
+      "metadata": null,
+      "territory_id": 10003,
+      "ttl": 78,
+      "last_touch_tick": 3,
+      "use_count": 3,
+      "mass": 5.86,
+      "heat": 2.1088212309160292,
+      "confidence": 0.7472457124999999,
+      "novelty": 0.2653531250000001,
+      "boredom": 0.16,
+      "inhibition": 0.14119800799999999,
+      "frontier_hits": 0,
+      "pending_condense": false
+    }
+  },
+  "engrams": {},
+  "frontier": {},
+  "next_territory": 10004,
+  "reward_ema": 0.166944375,
+  "pair_churn": {
+    "10001:10002": [
+      1,
+      4
+    ],
+    "10001:10003": [
+      1,
+      3
+    ],
+    "10002:10003": [
+      1,
+      2
+    ],
+    "10000:10002": [
+      2,
+      4
+    ],
+    "10000:10003": [
+      2,
+      3
+    ],
+    "10000:10001": [
+      3,
+      4
+    ]
+  },
+  "pair_last": {
+    "10001:10002": 4,
+    "10001:10003": 3,
+    "10002:10003": 2,
+    "10000:10002": 4,
+    "10000:10003": 3,
+    "10000:10001": 4
+  },
+  "territory_centroids": {},
+  "territory_counts": {
+    "10000": 1,
+    "10001": 1,
+    "10002": 1,
+    "10003": 1
+  },
+  "territory_member_dists": {
+    "10000": [],
+    "10001": [],
+    "10002": [],
+    "10003": []
+  },
+  "nn_distances": [],
+  "territory_tau": 0.3,
+  "split_counter": 0,
+  "merge_counter": 0,
+  "config": {
+    "capacity": 64,
+    "base_ttl": 120,
+    "decay_half_life": 16,
+    "prune_sample": 32,
+    "prune_target_ratio": 0.25,
+    "thread_safe": false,
+    "seed": 19,
+    "recency_half_life_ticks": 64,
+    "habituation_start": 32,
+    "habituation_scale": 1.0,
+    "boredom_weight": 0.35,
+    "frontier_novelty_threshold": 0.8,
+    "frontier_patience": 3,
+    "diffusion_interval": 12,
+    "diffusion_kappa": 0.25,
+    "exploration_churn_window": 32,
+    "condensation_boredom": 0.25,
+    "condensation_conf": 0.4,
+    "condensation_mass": 1.5
+  }
+}

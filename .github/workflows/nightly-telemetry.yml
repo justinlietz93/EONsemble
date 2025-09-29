@@ -1,0 +1,38 @@
+name: Nightly Telemetry
+
+on:
+  schedule:
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+
+jobs:
+  telemetry:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Generate telemetry report
+        env:
+          PYTHONPATH: .
+        run: |
+          python scripts/nightly_telemetry.py \
+            --iterations 18 \
+            --batch-size 5 \
+            --degrade-interval 3 \
+            --ttl-floor 18 \
+            --heat-gain 0.9 \
+            --ttl-boost 90
+
+      - name: Upload telemetry artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: void-telemetry
+          path: |
+            reports/void-telemetry-latest.json
+            reports/void-telemetry-latest.md

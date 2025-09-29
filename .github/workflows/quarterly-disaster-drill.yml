@@ -1,0 +1,36 @@
+name: Quarterly Disaster Recovery Drill
+
+on:
+  schedule:
+    - cron: '0 7 1 */3 *'
+  workflow_dispatch:
+
+jobs:
+  disaster-drill:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Execute disaster recovery drill
+        env:
+          PYTHONPATH: .
+        run: |
+          python scripts/disaster_recovery_drill.py \
+            --iterations 10 \
+            --batch-size 5 \
+            --degrade-interval 4 \
+            --ttl-floor 20 \
+            --heat-gain 0.95 \
+            --ttl-boost 100
+
+      - name: Upload drill artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: void-disaster-drill
+          path: reports/drills
