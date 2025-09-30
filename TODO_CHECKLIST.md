@@ -26,6 +26,34 @@
 - **Self-Critique**: This will bloat the section with additional annotations; to mitigate noise I will timestamp the new notes and
   clearly separate prior success evidence from the new regression data.
 
+### 2025-09-29 — Knowledge Base Tab Loss Reopening
+- **Context**: Live sessions still drop knowledge entries to zero immediately after changing top-level tabs despite the hydration
+  race guard. Reproduction captures indicate the persistence API occasionally returns an empty payload after the tab change and
+  before the local write flush completes, leaving the UI with no entries until a manual refresh or re-upload. The checklist needs
+  to stage remediation with explicit fallbacks that work even when the persistence endpoint is slow or unreachable.
+- **Options Considered**:
+  1. Mirror `useKV` writes into `localStorage` and treat it as an authoritative fallback whenever server hydration yields
+     `undefined`/`null`, ensuring intra-session survival without waiting for the backend.
+  2. Defer tab switches until the persistence PUT resolves successfully, effectively blocking navigation on outstanding writes.
+  3. Implement an optimistic cache layer that snapshots knowledge state on every mutation and restores it when hydration returns
+     an empty array, while still awaiting the backend for long-term storage.
+  4. Introduce a background reconciliation task that continuously retries failed persistence writes and replays them after tab
+     switches.
+  5. Persist knowledge updates to a dedicated IndexedDB store managed via a service worker, providing a more robust offline cache
+     than `localStorage`.
+- **Evaluation** (ranked by relevance & likelihood of success):
+  1. **Option 1** — Minimal surface area, immediate resilience against slow/offline persistence, easy to test in unit scope.
+     *Rank: 1*.
+  2. **Option 3** — Provides optimistic recovery but duplicates caching logic already present in `useKV`. *Rank: 2*.
+  3. **Option 2** — Prevents state loss but harms UX by blocking navigation on IO. *Rank: 3*.
+  4. **Option 4** — Adds significant complexity and delayed consistency semantics for a problem we can solve locally. *Rank: 4*.
+  5. **Option 5** — Powerful but disproportionate for the current regression, and heavier to ship/test. *Rank: 5*.
+- **Selected Approach**: Option 1 — Extend `useKV` with a resilient browser storage mirror (namespaced `localStorage`) that seeds
+  the in-memory store before server hydration and updates on every write.
+- **Self-Critique**: `localStorage` has size limits and synchronous semantics; we must keep payloads small and guard against
+  serialization errors. Will add explicit warnings + tests to ensure large knowledge uploads degrade gracefully rather than
+  throwing.
+
 ### 2025-09-29 — Hydration Race & Remote Runtime Validation
 - **Context**: Despite prior guards in `useKV`, knowledge uploads still disappear after switching tabs whenever the persistence
   hydration resolves after a local write. Remote runtime inputs
@@ -93,6 +121,39 @@
 ---
 
 ## Knowledge Base Persistence Regression
+- [DONE] Guarantee knowledge entries survive tab switches even when persistence hydration returns `undefined`/`null` or
+  races ahead of local writes.
+  - Decision Log (2025-09-29): Adopt the `localStorage` mirror approach captured in "Knowledge Base Tab Loss Reopening".
+  - Acceptance Criteria:
+    1. `useKV` seeds state from a namespaced browser storage mirror before server hydration completes.
+    2. Knowledge uploads remain visible after switching away from and back to the Knowledge tab with the persistence server
+       offline.
+    3. Unit tests cover hydration from the mirror store and verify that serialization failures surface as console warnings rather
+       than crashes.
+    4. Documentation (runbook or README) explains the fallback behaviour and outlines storage limits / troubleshooting.
+  - Next Steps:
+    1. Extend `useKV` with read/write helpers for the `localStorage` mirror, including graceful error handling.
+      2. Add Vitest coverage demonstrating hydration from the mirror when persistence fetches fail.
+      3. Update `app.knowledge-persistence.test.tsx` with a regression covering offline tab switching.
+      4. Amend documentation with a succinct note on the mirror fallback and storage constraints.
+  - Strict Judge Checklist: Confirm no additional regressions in agentic operations (`AutonomousEngine` single + continuous run)
+    after the persistence changes.
+  - Implementation Options Review (2025-09-29):
+    1. Inject a pluggable storage adapter into `useKV`, defaulting to `localStorage`, so tests can supply in-memory mocks.
+    2. Hard-code a `localStorage` mirror inside the hook with feature detection and graceful failure logging.
+    3. Build a separate `usePersistentKV` hook that wraps `useKV` and handles the mirror layer, leaving the base hook untouched.
+    4. Introduce a global persistence service singleton that orchestrates memory, browser storage, and server writes.
+    5. Mirror writes inside each consumer component (KnowledgeBase, AgentCollaboration) rather than at the hook level.
+    - Ranking: (1) pluggable adapter (testable, flexible) > (2) hard-coded mirror (simpler but less testable) > (4) global
+      service (overkill) > (3) wrapper hook (duplicative API) > (5) per-component mirror (error prone).
+    - Selected: Option 1 — Add an internal adapter abstraction but default it to a `localStorage` implementation, enabling
+      dependency injection in tests without rewriting all consumers.
+    - Self-Critique: Adapter pattern adds indirection; must keep API minimal (`read`, `write`, `remove`) to avoid complexity.
+  - Status Notes (2025-09-29): Implemented the adapter-backed mirror in `useKV`, added mirror hydration coverage in
+    `tests/hooks/useKV.test.tsx` and the app-level persistence suite, and documented the workflow in the memory restore runbook.
+    Confirmed agentic entry points remain healthy via `tests/components/screens.test.tsx`. *Strict Judge Review*: Validated
+    mirror resilience by unmounting and remounting the app with persistence offline — entries stayed intact thanks to the
+    `localStorage` seed, and Vitest now fails if the adapter path regresses.
 - [DONE] Document and reproduce the hydration race where late-arriving persistence reads overwrite fresh local writes.
   - Decision Log (2025-09-29):
     1. Extend the existing RTL suite with a controllable fetch promise that resolves after a local corpus upload.

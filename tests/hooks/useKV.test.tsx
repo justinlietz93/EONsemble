@@ -1,7 +1,7 @@
 import { act, renderHook, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { clearKVStore, useKV } from '@/hooks/useKV'
+import { clearKVStore, setKVStorageAdapter, useKV } from '@/hooks/useKV'
 
 const persistenceMocks = vi.hoisted(() => ({
   fetchPersistedValue: vi.fn<(key: string) => Promise<unknown | undefined>>(),
@@ -17,6 +17,10 @@ describe('useKV', () => {
     clearKVStore()
     fetchPersistedValue.mockReset()
     savePersistedValue.mockReset()
+    setKVStorageAdapter()
+    if (typeof window !== 'undefined' && window.localStorage) {
+      window.localStorage.clear()
+    }
   })
 
   it('retains local updates when persistence hydration resolves undefined after the update', async () => {
@@ -84,5 +88,41 @@ describe('useKV', () => {
     await waitFor(() => {
       expect(result.current[0]).toEqual([{ id: 'persisted' }])
     })
+  })
+
+  it('hydrates from the storage adapter when persistence is unavailable', async () => {
+    type Entry = { id: string }
+
+    const storageState: Record<string, Entry[]> = {
+      'knowledge-base': [{ id: 'mirror-entry' }]
+    }
+
+    setKVStorageAdapter({
+      read: (key) => storageState[key] as Entry[] | undefined,
+      write: (key, value) => {
+        storageState[key] = value as Entry[]
+      },
+      remove: (key) => {
+        delete storageState[key]
+      }
+    })
+
+    fetchPersistedValue.mockResolvedValueOnce(undefined)
+    savePersistedValue.mockResolvedValue()
+
+    const { result } = renderHook(() => useKV<Entry[]>('knowledge-base', () => []))
+
+    await waitFor(() => {
+      expect(result.current[0]).toEqual([{ id: 'mirror-entry' }])
+    })
+
+    act(() => {
+      result.current[1](prev => [...(prev ?? []), { id: 'added-entry' }])
+    })
+
+    expect(storageState['knowledge-base']).toEqual([
+      { id: 'mirror-entry' },
+      { id: 'added-entry' }
+    ])
   })
 })

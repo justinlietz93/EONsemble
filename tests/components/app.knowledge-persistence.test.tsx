@@ -526,4 +526,43 @@ describe('Knowledge base persistence behaviour', () => {
       ).toBeInTheDocument()
     })
   })
+
+  it('restores knowledge entries from the browser mirror when persistence fetches fail on reload', async () => {
+    sessionStorage.setItem('eon.activeTab', 'knowledge')
+
+    const offlineFetch = vi.fn(async () => {
+      throw new TypeError('Network request failed')
+    })
+
+    vi.stubGlobal('fetch', offlineFetch)
+
+    const { unmount } = render(<App />)
+
+    const knowledgeHeading = await screen.findByRole('heading', { name: /knowledge base/i })
+    const knowledgeView = knowledgeHeading.closest('div')?.parentElement?.parentElement ?? document.body
+
+    const addTestDataButton = await within(knowledgeView).findByRole('button', { name: /add test data/i })
+    fireEvent.click(addTestDataButton)
+
+    expect(await within(knowledgeView).findByText(/sample physics knowledge/i)).toBeInTheDocument()
+
+    const mirrored = window.localStorage.getItem('eon.kv.knowledge-base')
+
+    unmount()
+
+    clearKVStore()
+
+    if (mirrored) {
+      window.localStorage.setItem('eon.kv.knowledge-base', mirrored)
+    }
+
+    render(<App />)
+
+    const reloadedHeading = await screen.findByRole('heading', { name: /knowledge base/i })
+    const reloadedView = reloadedHeading.closest('div')?.parentElement?.parentElement ?? document.body
+
+    await waitFor(() => {
+      expect(within(reloadedView).getByText(/sample physics knowledge/i)).toBeInTheDocument()
+    })
+  })
 })

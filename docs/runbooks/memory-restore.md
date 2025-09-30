@@ -84,6 +84,12 @@ re-initialization, and collaboration history replay.
   persistence API is unreachable. Failed hydration attempts no longer overwrite
   populated knowledge arrays; the hook only falls back to defaults when no
   memory is present.
+- Beginning 2025-09-29, `useKV` also mirrors each write into
+  `window.localStorage` under the `eon.kv.<key>` namespace. On reload the mirror
+  seeds the in-memory store before server hydration, ensuring knowledge remains
+  visible even if persistence fetches fail. Mirror entries are cleared by
+  `clearKVStore()` and are subject to the browser's ~5–10 MB quota; large corpus
+  uploads should therefore be chunked conservatively.
 - When investigating suspected regressions, reproduce the offline scenario by
   mocking `fetchPersistedValue` to resolve `undefined` and verify that
   previously added entries remain visible.
@@ -107,6 +113,11 @@ re-initialization, and collaboration history replay.
   regression `drops stale persisted values when hydration resolves after a newer
   local update` (run with `npx vitest run tests/hooks/useKV.test.tsx`) fails if
   the guard is removed.
+- Validate mirror hydration by running
+  `npx vitest run tests/components/app.knowledge-persistence.test.tsx -t "browser mirror"`,
+  which unmounts the app, clears the in-memory cache, and confirms the
+  `localStorage` mirror repopulates knowledge entries while the persistence API
+  stays offline.
 - Session reset diagnostics can be enabled via
   `window.localStorage.setItem('eon.debugSessionTrace', 'true')`. The enhanced
   `useSessionDiagnostics` hook logs mounts, unmounts, and unexpected tab resets

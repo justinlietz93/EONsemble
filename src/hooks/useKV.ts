@@ -9,6 +9,85 @@ export type KVUpdater<T> = Updater<T>
 
 const memoryStore = new Map<string, unknown>()
 
+const STORAGE_PREFIX = 'eon.kv.'
+
+type StorageAdapter = {
+  read<T>(key: string): T | undefined
+  write<T>(key: string, value: T): void
+  remove(key: string): void
+}
+
+const buildDefaultAdapter = (): StorageAdapter => {
+  if (typeof window === 'undefined') {
+    return {
+      read: () => undefined,
+      write: () => {},
+      remove: () => {}
+    }
+  }
+
+  return {
+    read: <T,>(key: string): T | undefined => {
+      try {
+        const raw = window.localStorage?.getItem(`${STORAGE_PREFIX}${key}`)
+        if (raw === null || raw === undefined) {
+          return undefined
+        }
+
+        return JSON.parse(raw) as T
+      } catch (error) {
+        console.warn(`[useKV] Failed to parse browser storage for key "${key}"`, error)
+        return undefined
+      }
+    },
+    write: <T,>(key: string, value: T): void => {
+      try {
+        window.localStorage?.setItem(`${STORAGE_PREFIX}${key}`, JSON.stringify(value))
+      } catch (error) {
+        console.warn(`[useKV] Failed to persist browser storage value for key "${key}"`, error)
+      }
+    },
+    remove: (key: string): void => {
+      try {
+        window.localStorage?.removeItem(`${STORAGE_PREFIX}${key}`)
+      } catch (error) {
+        console.warn(`[useKV] Failed to remove browser storage value for key "${key}"`, error)
+      }
+    }
+  }
+}
+
+let storageAdapter: StorageAdapter = buildDefaultAdapter()
+
+const readFromAdapter = <T,>(key: string): T | undefined => {
+  try {
+    return storageAdapter.read<T>(key)
+  } catch (error) {
+    console.warn(`[useKV] Storage adapter read failed for key "${key}"`, error)
+    return undefined
+  }
+}
+
+const writeToAdapter = <T,>(key: string, value: T): void => {
+  try {
+    storageAdapter.write<T>(key, value)
+  } catch (error) {
+    console.warn(`[useKV] Storage adapter write failed for key "${key}"`, error)
+  }
+}
+
+const removeFromAdapter = (key: string): void => {
+  try {
+    storageAdapter.remove(key)
+  } catch (error) {
+    console.warn(`[useKV] Storage adapter remove failed for key "${key}"`, error)
+  }
+}
+
+export const setKVStorageAdapter = (adapter?: StorageAdapter): void => {
+  storageAdapter = adapter ?? buildDefaultAdapter()
+}
+
 const resolveInitial = <T,>(value: InitialValue<T>): T =>
   typeof value === 'function' ? (value as () => T)() : value
 
@@ -41,7 +120,21 @@ export function useKV<T>(key: string, defaultValue: InitialValue<T>): [T, (value
     }
   }
 
-  const [value, setValue] = useState<T>(() => ensureMemoryValue(keyRef.current, defaultValueRef.current))
+  const [value, setValue] = useState<T>(() => {
+    if (memoryStore.has(keyRef.current)) {
+      return memoryStore.get(keyRef.current) as T
+    }
+
+    const mirrored = readFromAdapter<T>(keyRef.current)
+    if (mirrored !== undefined) {
+      memoryStore.set(keyRef.current, mirrored)
+      return mirrored
+    }
+
+    const ensured = ensureMemoryValue(keyRef.current, defaultValueRef.current)
+    writeToAdapter(keyRef.current, ensured)
+    return ensured
+  })
 
   useEffect(() => {
     let cancelled = false
@@ -53,9 +146,19 @@ export function useKV<T>(key: string, defaultValue: InitialValue<T>): [T, (value
       const fallback = defaultValueRef.current
 
       if (stored === undefined || (stored === null && fallback !== null)) {
+        const mirrored = readFromAdapter<T>(key)
+        if (mirrored !== undefined) {
+          memoryStore.set(key, mirrored)
+          if (!cancelled) {
+            setValue(mirrored)
+          }
+          return
+        }
+
         if (!memoryStore.has(key)) {
           memoryStore.set(key, fallback)
           await savePersistedValue(key, fallback)
+          writeToAdapter(key, fallback)
           if (!cancelled) {
             setValue(fallback)
           }
@@ -78,6 +181,7 @@ export function useKV<T>(key: string, defaultValue: InitialValue<T>): [T, (value
       }
 
       memoryStore.set(key, stored)
+      writeToAdapter(key, stored)
       if (!cancelled) {
         setValue(stored)
       }
@@ -98,6 +202,7 @@ export function useKV<T>(key: string, defaultValue: InitialValue<T>): [T, (value
         hasLocalWriteRef.current = true
         memoryStore.set(keyRef.current, resolved)
         void savePersistedValue(keyRef.current, resolved)
+        writeToAdapter(keyRef.current, resolved)
         return resolved
       })
     },
@@ -108,6 +213,9 @@ export function useKV<T>(key: string, defaultValue: InitialValue<T>): [T, (value
 }
 
 export function clearKVStore(): void {
+  for (const key of memoryStore.keys()) {
+    removeFromAdapter(key)
+  }
   memoryStore.clear()
   // Optionally clear server-side store by removing known keys
   // but since keys are dynamic we only reset local cache here.
