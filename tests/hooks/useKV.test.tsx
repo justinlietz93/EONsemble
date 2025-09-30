@@ -46,6 +46,33 @@ describe('useKV', () => {
     expect(fetchPersistedValue).toHaveBeenCalledTimes(1)
   })
 
+  it('drops stale persisted values when hydration resolves after a newer local update', async () => {
+    let resolveFetch: ((value: unknown) => void) | undefined
+    fetchPersistedValue.mockImplementation(
+      () =>
+        new Promise(resolve => {
+          resolveFetch = resolve
+        })
+    )
+    savePersistedValue.mockResolvedValue()
+
+    type Entry = { id: string }
+
+    const { result } = renderHook(() => useKV<Entry[]>('knowledge-base', () => []))
+
+    act(() => {
+      result.current[1]([{ id: 'local-entry' }])
+    })
+
+    await act(async () => {
+      resolveFetch?.([])
+      await Promise.resolve()
+    })
+
+    expect(result.current[0]).toEqual([{ id: 'local-entry' }])
+    expect(fetchPersistedValue).toHaveBeenCalledTimes(1)
+  })
+
   it('hydrates from persisted storage when available', async () => {
     type Entry = { id: string }
 

@@ -101,6 +101,12 @@ re-initialization, and collaboration history replay.
   `tests/components/app.knowledge-persistence.test.tsx` exercises this path by
   uploading, tab-hopping immediately, and verifying both the persisted payload
   and UI state remain intact.
+- Hydration races are prevented via per-key revision counters and a local-write
+  flag inside `useKV`. If the persistence API returns stale data after a user
+  mutation, the hook discards the payload instead of overwriting memory. The
+  regression `drops stale persisted values when hydration resolves after a newer
+  local update` (run with `npx vitest run tests/hooks/useKV.test.tsx`) fails if
+  the guard is removed.
 - Session reset diagnostics can be enabled via
   `window.localStorage.setItem('eon.debugSessionTrace', 'true')`. The enhanced
   `useSessionDiagnostics` hook logs mounts, unmounts, and unexpected tab resets

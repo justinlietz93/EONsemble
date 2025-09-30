@@ -2,19 +2,21 @@
 
 ## Decision Log
 
-### 2025-09-29 — Knowledge Persistence Reopened & Remote Runtime Validation
-- **Context**: Despite prior guards in `useKV`, knowledge uploads still disappear after switching tabs. Remote runtime inputs
+### 2025-09-29 — Hydration Race & Remote Runtime Validation
+- **Context**: Despite prior guards in `useKV`, knowledge uploads still disappear after switching tabs whenever the persistence
+  hydration resolves after a local write. Remote runtime inputs
   (Ollama/Qdrant URLs) also require end-to-end verification on split-host deployments. The checklist must acknowledge the
   regression and stage remediation tasks sequentially.
 - **Options Considered**:
-  1. Reopen the prior knowledge persistence bullets, mark them as `[RETRYING]`, and append new subtasks for runtime capture,
-     persistence tracing, and regression automation within this file.
+  1. Reopen the prior knowledge persistence bullets, mark them as `[RETRYING]`, and append new subtasks for racing hydration,
+     remote runtime capture, and regression automation directly here.
   2. Draft a standalone incident report covering the reopened regression while leaving this checklist untouched.
   3. Collapse the persistence efforts into a single "stability audit" epic that references external documents/tests for detail.
   4. Replace the checklist with a kanban-style status table to emphasise ownership and blockers.
   5. Archive the existing persistence section and author a brand-new one scoped only to the reopened issue.
 - **Evaluation** (ranked by relevance & success likelihood):
-  1. **Option 1** — Maintains continuity, visibly signals regression, and keeps reasoning colocated. *Rank: 1*.
+  1. **Option 1** — Maintains continuity, visibly signals regression, and keeps reasoning colocated with the race analysis.
+     *Rank: 1*.
   2. **Option 5** — Fresh slate but risks losing historical insight needed for comparison. *Rank: 2*.
   3. **Option 2** — Adds structure yet introduces doc sprawl and context-switching overhead. *Rank: 3*.
   4. **Option 4** — Easier to scan but sacrifices the detailed decision logs mandated by the user. *Rank: 4*.
@@ -67,6 +69,53 @@
 ---
 
 ## Knowledge Base Persistence Regression
+- [DONE] Document and reproduce the hydration race where late-arriving persistence reads overwrite fresh local writes.
+  - Decision Log (2025-09-29):
+    1. Extend the existing RTL suite with a controllable fetch promise that resolves after a local corpus upload.
+    2. Build a dedicated `useKV` unit test that simulates deferred hydration using manual promise controls.
+    3. Use Playwright to reproduce the race in a headless browser with throttled network conditions.
+    4. Capture manual HAR traces while toggling tabs immediately after uploads and annotate timestamps.
+    5. Instrument the server persistence handler to delay responses during local QA sessions.
+    - Ranking: (2) `useKV` unit test (direct focus, minimal UI noise) > (1) RTL suite (higher fidelity but heavier setup)
+      > (3) Playwright (slow) > (4) manual HAR (non-repeatable) > (5) server instrumentation (intrusive).
+    - Selected Approach: Option 2 — craft a `useKV` unit test with deferred hydration to reproduce the state clobber.
+    - Self-Critique: Unit scope may miss integration nuances; will complement with app-level smoke once guard lands.
+  - Status Notes (2025-09-29): Added `drops stale persisted values when hydration resolves after a newer local update` in `tests/hooks/useKV.test.tsx`, which failed prior to the guard and now codifies the race. *Strict Judge Review*: Confirms the test exercises pending hydration plus local writes and fails without the fix.
+- [DONE] Guard against stale hydration overwriting more recent local updates inside `useKV`.
+  - Decision Log (2025-09-29):
+    1. Track a revision counter per key and drop hydration results if a newer local write occurred mid-flight.
+    2. Cancel inflight hydration once a local write happens by leveraging `AbortController`.
+    3. Queue hydration completion but merge arrays/maps instead of full replacement.
+    4. Serialize updates through a mutex so hydration waits for pending writes to flush first.
+    5. Defer hydration entirely until the first paint settles, trading freshness for safety.
+    - Ranking: (1) revision counter (simple, deterministic) > (2) abort controller (requires fetch support + plumbing)
+      > (3) merge semantics (data-shape-specific) > (4) mutex (complex) > (5) delayed hydration (UI lag).
+    - Selected Approach: Option 1 — revision counters drop stale payloads without altering API shape.
+    - Self-Critique: Requires careful synchronization to avoid skipping legitimate remote updates; will assert via tests.
+  - Status Notes (2025-09-29): Revision + local-write guards prevent stale hydrations from clobbering state; verified via the new regression test and manual code audit to ensure defaults no longer reset revisions. *Strict Judge Review*: Checked that inline default arrays no longer reset the revision counter.
+- [DONE] Extend automated coverage to fail when hydration clobbers local updates.
+  - Decision Log (2025-09-29):
+    1. Add a `useKV` regression test using controlled promises to emulate the race.
+    2. Expand `app.knowledge-persistence.test.tsx` with a mock fetch that resolves late.
+    3. Introduce a Cypress smoke test covering manual reproduction with network throttling.
+    4. Add a server-level unit test to ensure persistence read/write ordering remains consistent.
+    5. Record a Playwright trace for manual review but not automation.
+    - Ranking: (1) hook regression (fast, targeted) > (2) RTL extension (comprehensive but slower)
+      > (4) server test (less coverage of UI) > (3) Cypress (infrastructure heavy) > (5) Playwright trace (manual only).
+    - Selected Approach: Option 1 — implement hook-level regression first, then optionally mirror at RTL scope.
+    - Self-Critique: Hook test alone might not catch integration quirks; plan to sanity-check via RTL once stable.
+  - Status Notes (2025-09-29): Hook-level regression operational; RTL follow-up queued if future regressions surface. *Strict Judge Review*: Coverage now fails when guard removed and passes with fix.
+- [DONE] Update documentation/runbooks to describe the new hydration guard once verified.
+  - Decision Log (2025-09-29):
+    1. Append a "Hydration Race" appendix to the memory restore runbook with mitigation steps.
+    2. Add troubleshooting FAQ entries to README.
+    3. Produce a standalone incident postmortem referencing tests and code changes.
+    4. Record a screencast walkthrough (deferred due to environment constraints).
+    5. Update inline code comments only, leaving docs unchanged.
+    - Ranking: (1) runbook appendix (most actionable) > (2) README FAQ > (3) postmortem > (5) comments only > (4) screencast.
+    - Selected Approach: Option 1 — extend the runbook once fix is validated.
+    - Self-Critique: Must ensure docs stay concise; will link to relevant tests to avoid duplication.
+  - Status Notes (2025-09-29): Runbook appendix now covers the revision/local-write guard and references the new Vitest regression. *Strict Judge Review*: Documentation links to the exact test command and clarifies failure modes.
 - [DONE] Compile a reproducible scenario for disappearing knowledge entries.
   - Capture: browser console logs, network traces to `/api/state/knowledge-base`, and the exact UI flow (tab order, uploads vs manual entry).
   - Decision Log (2025-01-15):
@@ -156,6 +205,55 @@
     - Self-Critique: Relies on call sites threading accurate reason metadata; will double-check guard paths set descriptive reasons before marking this item complete.
   - 2025-09-29 Update: Added tab change reason + reset status metadata to `useSessionDiagnostics`, threaded guard-origin reasons from `<App />`, and expanded tests to confirm logs include reason/lastReset context. Regression suites now expose whether a goal-setup switch stemmed from user input versus persistence fallbacks.
   - Strict Judge Review (2025-09-29): Verified new diagnostics emit structured reason tags during tab toggles (user clicks vs. guard restores) and exercised both hook-level and app-level tests to ensure coverage; noted that true unexpected resets will surface as `reason=persistence-reset` with `lastReset=persistence-reset` once reproduced outside deliberate user navigation.
+
+---
+
+
+## Agent Execution Idle Regression (Single & Autonomous Runs)
+- [RETRYING] Capture reproducible traces for the "idle" single-run/autonomous hang.
+  - Decision Log (2025-09-29):
+    1. Instrument `useAutonomousEngine` with status callbacks and mock providers inside a Vitest harness to observe stuck state.
+    2. Add logging middleware around agent API calls in the dev server to inspect outbound requests/responses.
+    3. Build a storybook-like sandbox that exercises single/autonomous runs with mock data for manual QA.
+    4. Record a HAR trace from the UI while triggering both modes to inspect network stalls.
+    5. Write an ADR summarizing suspected causes before coding (defer reproduction).
+    - Ranking: (1) Vitest harness (deterministic, automatable) > (2) server middleware (useful but server-heavy) > (3) sandbox (time-consuming) > (4) HAR trace (manual) > (5) ADR first (premature).
+    - Selected Approach: Option 1 — craft a regression test around `useAutonomousEngine` to surface the idle loop.
+    - Self-Critique: Test scaffolding may require extensive mocking; ensure complexity doesn't delay fix cadence.
+  - Status Notes (2025-09-29): Test plan drafted; mocks pending.
+- [STARTED] Diagnose why `runSingleTurn`/`runContinuousLoop` resolve without producing derivations.
+  - Decision Log (2025-09-29):
+    1. Mock `generateAgentResponse` to resolve immediately and assert knowledge/derivation writes occur.
+    2. Step through the real implementation with mock fetch responses to ensure provider configs propagate.
+    3. Replace `generateAgentResponse` with a simplified synchronous generator to isolate concurrency issues.
+    4. Add explicit `isRunning` guards that fail tests if loops exit unexpectedly.
+    5. Instrument UI components with `console.error` on idle loops and rely on manual QA.
+    - Ranking: (1) mock resolution (fast) > (2) step-through (accurate but slower) > (3) simplified generator (temporary) > (4) guard tests (supporting) > (5) manual logs.
+    - Selected Approach: Option 1 — use deterministic mocks in tests to catch missing state updates.
+    - Self-Critique: Must ensure mocks mirror actual API contract; will keep fallback tests referencing real logic where viable.
+  - Status Notes (2025-09-29): Investigative mocks under construction.
+- [NOT STARTED] Implement fix ensuring single/autonomous runs emit visible output and persist knowledge.
+  - Decision Log (2025-09-29):
+    1. Resolve promise chain in `processAgentTurn` to guarantee `setDerivationHistory`/`setKnowledgeBase` updates before status reset.
+    2. Add awaitable queue so concurrent invocations cannot race.
+    3. Split single-run and autonomous loops so `isRunning` semantics differ per mode.
+    4. Introduce retry/backoff around provider calls with timeouts.
+    5. Defer to UI-level guard that retries when no derivations were produced.
+    - Ranking: (1) resolve promise chain (likely root cause) > (2) queue (heavy) > (4) retry/backoff (addresses network) > (3) loop split (structural) > (5) UI guard (symptom only).
+    - Selected Approach: Option 1 — inspect asynchronous flow and ensure state writes occur before the run is marked idle.
+    - Self-Critique: Need evidence before committing; ranking may change post-investigation.
+  - Status Notes (2025-09-29): Awaiting investigation outcomes.
+- [NOT STARTED] Backfill automated tests covering productive single and autonomous runs.
+  - Decision Log (2025-09-29):
+    1. Extend `useAutonomousEngine` tests with deterministic mocks verifying knowledge/derivation updates per turn.
+    2. Add RTL test around `AgentCollaboration` toggling single vs. autonomous triggers.
+    3. Provide a contract test for the underlying agent API stub.
+    4. Add end-to-end Playwright smoke.
+    5. Rely on manual QA only.
+    - Ranking: (1) hook-level test > (2) RTL > (3) contract > (4) Playwright > (5) manual.
+    - Selected Approach: Option 1 — start with hook-level coverage for determinism.
+    - Self-Critique: Hook tests alone may miss UI wiring; will consider RTL once hook coverage passes.
+  - Status Notes (2025-09-29): Blocked pending fix implementation.
 
 ---
 

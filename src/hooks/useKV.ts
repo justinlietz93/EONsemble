@@ -24,11 +24,21 @@ export function useKV<T>(key: string, defaultValue: InitialValue<T>): [T, (value
   const keyRef = useRef(key)
   const defaultSourceRef = useRef<InitialValue<T>>(defaultValue)
   const defaultValueRef = useRef<T>(resolveInitial(defaultValue))
+  const revisionRef = useRef(0)
+  const hasLocalWriteRef = useRef(false)
 
-  if (keyRef.current !== key || defaultSourceRef.current !== defaultValue) {
+  if (keyRef.current !== key) {
     keyRef.current = key
     defaultSourceRef.current = defaultValue
     defaultValueRef.current = resolveInitial(defaultValue)
+    revisionRef.current = 0
+    hasLocalWriteRef.current = false
+  } else if (defaultSourceRef.current !== defaultValue) {
+    defaultSourceRef.current = defaultValue
+    const resolvedDefault = resolveInitial(defaultValue)
+    if (!Object.is(defaultValueRef.current, resolvedDefault)) {
+      defaultValueRef.current = resolvedDefault
+    }
   }
 
   const [value, setValue] = useState<T>(() => ensureMemoryValue(keyRef.current, defaultValueRef.current))
@@ -37,6 +47,7 @@ export function useKV<T>(key: string, defaultValue: InitialValue<T>): [T, (value
     let cancelled = false
 
     const load = async () => {
+      const loadRevision = revisionRef.current
       const stored = await fetchPersistedValue<T>(key)
 
       const fallback = defaultValueRef.current
@@ -62,6 +73,10 @@ export function useKV<T>(key: string, defaultValue: InitialValue<T>): [T, (value
         return
       }
 
+      if ((hasLocalWriteRef.current && revisionRef.current >= loadRevision) || revisionRef.current !== loadRevision) {
+        return
+      }
+
       memoryStore.set(key, stored)
       if (!cancelled) {
         setValue(stored)
@@ -79,6 +94,8 @@ export function useKV<T>(key: string, defaultValue: InitialValue<T>): [T, (value
     (nextValue: Updater<T>) => {
       setValue(prev => {
         const resolved = typeof nextValue === 'function' ? (nextValue as (previous: T) => T)(prev) : nextValue
+        revisionRef.current += 1
+        hasLocalWriteRef.current = true
         memoryStore.set(keyRef.current, resolved)
         void savePersistedValue(keyRef.current, resolved)
         return resolved
