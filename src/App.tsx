@@ -64,6 +64,9 @@ function App() {
   const currentGoal = goals?.find(g => g.id === activeGoal)
   const hasActiveGoal = Boolean(currentGoal)
 
+  const shouldLogKnowledgeDiagnostics = import.meta.env.MODE !== 'production'
+  const previousKnowledgeCountRef = useRef<number>(knowledgeBase?.length ?? 0)
+
   const lastNonLaunchTabRef = useRef<string>('goal-setup')
   const goalTabAllowanceRef = useRef(false)
   const tabChangeReasonRef = useRef<'initial-load' | 'user-selection' | 'auto-restore' | 'persistence-reset'>('initial-load')
@@ -150,6 +153,29 @@ function App() {
   const derivedLastDetectedReset = unexpectedReset
     ? 'persistence-reset'
     : lastDetectedResetRef.current
+
+  useEffect(() => {
+    const previousCount = previousKnowledgeCountRef.current
+    const currentCount = knowledgeBase?.length ?? 0
+
+    if (shouldLogKnowledgeDiagnostics && currentCount < previousCount) {
+      console.warn('[App] Knowledge entry count decreased', {
+        previousCount,
+        currentCount,
+        activeTab,
+        tabChangeReason: derivedTabChangeReason,
+        lastDetectedReset: derivedLastDetectedReset
+      })
+    }
+
+    previousKnowledgeCountRef.current = currentCount
+  }, [
+    activeTab,
+    derivedLastDetectedReset,
+    derivedTabChangeReason,
+    knowledgeBase,
+    shouldLogKnowledgeDiagnostics
+  ])
 
   useSessionDiagnostics(activeTab, {
     activeGoalId: activeGoal || null,

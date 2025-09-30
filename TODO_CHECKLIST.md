@@ -2,6 +2,30 @@
 
 ## Decision Log
 
+### 2025-09-29 — Knowledge Base Still Resets After Tab Switch
+- **Context**: Despite the hydration guard and regression suites, the user still sees the knowledge counter drop to zero after
+  corpus uploads whenever they navigate away and back. The checklist must capture the reopened failure so we can treat the prior
+  "done" items as provisional and plan the next investigative steps.
+- **Options Considered**:
+  1. Reclassify the affected knowledge persistence bullets as `[RETRYING]`, append fresh acceptance criteria, and document the
+     discrepancy between automated coverage and the live repro.
+  2. Spin up a brand-new "Knowledge Loss v2" section that references the original work while leaving historical `[DONE]`
+     statuses untouched.
+  3. Move the regression details into a separate incident report and link from the checklist to keep this file shorter.
+  4. Replace the long-form narrative with a matrix (task × status × latest observation) for quicker scanning.
+  5. Archive the existing section entirely and rebuild it from scratch to avoid conflating new and old reasoning.
+- **Evaluation** (ranked by relevance & likelihood of success):
+  1. **Option 1** — Keeps continuity, makes the regression explicit, and enables incremental updates without fragmenting history.
+     *Rank: 1*.
+  2. **Option 2** — Easier to skim but risks duplicating prior rationale; some context would be lost. *Rank: 2*.
+  3. **Option 4** — Improves scanability yet sacrifices the mandated decision-log depth. *Rank: 3*.
+  4. **Option 5** — Heavy-handed reset that erases earlier learnings. *Rank: 4*.
+  5. **Option 3** — Spreads context across documents, increasing overhead during step-by-step execution. *Rank: 5*.
+- **Selected Approach**: Option 1 — Reopen the pertinent bullets with `[RETRYING]`, annotate them with new acceptance criteria,
+  and cross-reference the failing live scenario versus passing tests.
+- **Self-Critique**: This will bloat the section with additional annotations; to mitigate noise I will timestamp the new notes and
+  clearly separate prior success evidence from the new regression data.
+
 ### 2025-09-29 — Hydration Race & Remote Runtime Validation
 - **Context**: Despite prior guards in `useKV`, knowledge uploads still disappear after switching tabs whenever the persistence
   hydration resolves after a local write. Remote runtime inputs
@@ -150,7 +174,7 @@
 - [DONE] Identify the root cause and draft a remediation plan that preserves clean-architecture boundaries.
   - Acceptance: Written hypothesis validated by code inspection or reproduction artifacts, plus proposed fix with risk assessment.
   - Findings: Reproduction test confirms the knowledge array resets when the persistence layer hydrates `null`. Root cause traced to `useKV` treating `null` as a legitimate payload even when the default isn't `null`, clobbering in-memory state. Remediation: coerce `null` to the configured fallback and emit diagnostics while preserving intentional `null` usage (e.g., active goal IDs).
-- [DONE] Implement the fix ensuring knowledge survives tab switches, uploads, and autonomous agent writes without regressions.
+- [RETRYING] Implement the fix ensuring knowledge survives tab switches, uploads, and autonomous agent writes without regressions.
   - Acceptance: Automated tests covering manual add + corpus upload + tab switch, plus manual validation notes.
   - Work: Updated `useKV` to treat unexpected `null` hydrations as cache misses, restore the configured fallback, and emit targeted warnings. Added regression coverage in `tests/components/app.knowledge-persistence.test.tsx` to assert knowledge entries persist after a simulated null hydration.
   - 2025-09-29 Decision Log:
@@ -163,6 +187,22 @@
     - Selection: Option 1 — removing the wrapper-induced stale closures is the least invasive change that preserves clean architecture boundaries and keeps concurrency semantics correct.
     - Self-Critique: Direct setter threading increases coupling for now; document the need for a dedicated persistence interface in a follow-up if knowledge responsibilities expand.
   - 2025-09-29 Gap Closure: Validated knowledge retention after asynchronous corpus uploads and tab navigation under the new guard; persisted store assertions confirm writes occur before navigation.
+  - 2025-09-29 Reopen Note: Live manual testing still shows knowledge counts resetting to zero after leaving and re-entering the knowledge tab post-upload. Automated coverage passes, so the gap appears to stem from an unmodelled runtime condition (likely asynchronous unmount/cleanup). New acceptance criteria added below.
+- [STARTED] Isolate why live uploads vanish after tab changes despite passing regressions.
+  - Decision Log (2025-09-29):
+    1. Capture a browser devtools performance profile while uploading and switching tabs to inspect React warnings about state updates on unmounted components.
+    2. Add verbose logging (feature-flagged) around `CorpusUpload` lifecycle hooks to detect whether uploads finish after the component unmounts.
+    3. Extend `app.knowledge-persistence.test.tsx` with a regression that imitates the user switching tabs *before* `FileReader` resolves to verify our current mocks cover the timing window.
+    4. Build a lightweight Playwright smoke that uploads a large file and immediately navigates away/back to capture full fidelity.
+    5. Instrument the persistence API (`savePersistedValue`) to record timestamps so we can compare write completion versus navigation.
+  - Ranking: (3) test timing regression (fast, automatable) > (2) lifecycle logging (minimal code churn) > (1) performance profile (manual but high fidelity) > (5) persistence instrumentation (server touchpoint) > (4) Playwright (heavy infra).
+  - Selected Approach: Option 3 — augment the existing RTL regression to simulate navigation before `FileReader` settles, confirming whether we miss the race in tests.
+  - Self-Critique: The mocking required to pause `FileReader` may overfit to test harness behaviour; I will pair it with targeted logging to ensure we do not chase phantom races.
+  - Status Notes (2025-09-29): Added `retains corpus uploads even when file processing completes after leaving the tab`, which manually defers the `FileReader` resolution until after navigation. The regression passes, signalling the live failure stems from a different condition (likely outside our current mocks). Next step: capture lifecycle logging to spot cleanup races.
+  - Status Notes (2025-09-29, later): Instrumented `CorpusUpload` with mount/unmount diagnostics and guarded file-state updates so we can detect uploads finishing after the component unmounts. Vitest output now reports when knowledge writes happen post-unmount, confirming the timing window exists and giving us breadcrumbs for the root cause analysis.
+- [NOT STARTED] Patch the root cause once identified, ensuring no knowledge loss across manual uploads, agent writes, and goal resets.
+  - Acceptance: Live manual QA documented plus passing automated regressions covering the new timing scenario.
+  - Follow-up: Update documentation/runbooks once the fix lands.
 - [DONE] Extend automated coverage focused on the resolved failure mode (e.g., component test simulating tab toggles or persistence fallback).
   - Acceptance: New Vitest/React Testing Library suite fails before the fix and passes after.
   - Coverage: `tests/components/app.knowledge-persistence.test.tsx` now verifies knowledge retention under standard tab toggles and exercises a simulated persistence hydration returning `null`, which failed prior to the `useKV` guard and passes post-fix.

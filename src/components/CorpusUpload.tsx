@@ -18,19 +18,12 @@ import {
 import { KnowledgeEntry } from '@/App'
 import type { KVUpdater } from '@/hooks/useKV'
 import { toast } from 'sonner'
+import type { UploadedFile } from './corpus-upload/types'
+import { useCorpusUploadDiagnostics } from './corpus-upload/useCorpusUploadDiagnostics'
 
 interface CorpusUploadProps {
   knowledgeBase: KnowledgeEntry[]
   setKnowledgeBase: (knowledge: KVUpdater<KnowledgeEntry[]>) => void
-}
-
-interface UploadedFile {
-  id: string
-  file: File
-  status: 'pending' | 'processing' | 'completed' | 'error'
-  progress: number
-  extractedText?: string
-  error?: string
 }
 
 const WORDS_PER_CHUNK = 500
@@ -82,6 +75,14 @@ export function CorpusUpload({ knowledgeBase, setKnowledgeBase }: CorpusUploadPr
   const [isDragOver, setIsDragOver] = useState(false)
   const [isProcessing, setIsProcessing] = useState(false)
 
+  const {
+    updateFiles,
+    registerUploadStart,
+    logCompletion,
+    logError,
+    clearPending
+  } = useCorpusUploadDiagnostics(setFiles)
+
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault()
     setIsDragOver(true)
@@ -119,9 +120,10 @@ export function CorpusUpload({ knowledgeBase, setKnowledgeBase }: CorpusUploadPr
   }
 
   const processFile = useCallback(async (uploadedFile: UploadedFile) => {
+    const startedAt = registerUploadStart(uploadedFile)
     try {
       // Update status to processing
-      setFiles(prev => prev.map(f =>
+      updateFiles(prev => prev.map(f =>
         f.id === uploadedFile.id
           ? { ...f, status: 'processing', progress: 10 }
           : f
@@ -129,18 +131,18 @@ export function CorpusUpload({ knowledgeBase, setKnowledgeBase }: CorpusUploadPr
 
       // Extract text from file
       const extractedText = await extractTextFromFile(uploadedFile.file)
-      
-      setFiles(prev => prev.map(f => 
-        f.id === uploadedFile.id 
+
+      updateFiles(prev => prev.map(f =>
+        f.id === uploadedFile.id
           ? { ...f, progress: 50, extractedText }
           : f
       ))
 
       // Chunk the text into knowledge entries
       const chunks = chunkText(extractedText, uploadedFile.file.name)
-      
-      setFiles(prev => prev.map(f => 
-        f.id === uploadedFile.id 
+
+      updateFiles(prev => prev.map(f =>
+        f.id === uploadedFile.id
           ? { ...f, progress: 80 }
           : f
       ))
@@ -150,10 +152,11 @@ export function CorpusUpload({ knowledgeBase, setKnowledgeBase }: CorpusUploadPr
         ...((Array.isArray(prev) ? prev : [])),
         ...chunks
       ])
-      
+      logCompletion(uploadedFile, chunks.length, startedAt)
+
       // Mark as completed
-      setFiles(prev => prev.map(f => 
-        f.id === uploadedFile.id 
+      updateFiles(prev => prev.map(f =>
+        f.id === uploadedFile.id
           ? { ...f, status: 'completed', progress: 100 }
           : f
       ))
@@ -161,14 +164,24 @@ export function CorpusUpload({ knowledgeBase, setKnowledgeBase }: CorpusUploadPr
       toast.success(`Processed ${uploadedFile.file.name} - Added ${chunks.length} knowledge entries`)
 
     } catch (error) {
-      setFiles(prev => prev.map(f =>
+      updateFiles(prev => prev.map(f =>
         f.id === uploadedFile.id
           ? { ...f, status: 'error', error: error instanceof Error ? error.message : 'Processing failed' }
           : f
       ))
+      logError(uploadedFile, error)
       toast.error(`Failed to process ${uploadedFile.file.name}`)
+    } finally {
+      clearPending(uploadedFile.id)
     }
-  }, [setKnowledgeBase])
+  }, [
+    clearPending,
+    logCompletion,
+    logError,
+    registerUploadStart,
+    setKnowledgeBase,
+    updateFiles
+  ])
 
   const handleDrop = useCallback(async (e: React.DragEvent) => {
     e.preventDefault()
