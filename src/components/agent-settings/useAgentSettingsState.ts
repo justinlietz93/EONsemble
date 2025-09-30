@@ -49,6 +49,11 @@ export interface AgentSettingsState {
   openRouterError: string | null
   ollamaBaseUrl: string
   openRouterBaseUrl: string
+  qdrantBaseUrl: string
+  qdrantStatus: 'unknown' | 'ready' | 'error'
+  qdrantLoading: boolean
+  qdrantMessage: string | null
+  probeQdrant: () => Promise<void>
   handleAgentConfigChange: <Field extends keyof AgentConfig>(
     agentId: string,
     field: Field,
@@ -100,6 +105,10 @@ export function useAgentSettingsState({
   const [openRouterLoading, setOpenRouterLoading] = useState(false)
   const [openRouterError, setOpenRouterError] = useState<string | null>(null)
 
+  const [qdrantStatus, setQdrantStatus] = useState<'unknown' | 'ready' | 'error'>('unknown')
+  const [qdrantLoading, setQdrantLoading] = useState(false)
+  const [qdrantMessage, setQdrantMessage] = useState<string | null>(null)
+
   const defaultReferer = useMemo(() => {
     if (typeof window === 'undefined') {
       return 'http://localhost'
@@ -147,6 +156,11 @@ export function useAgentSettingsState({
     const fallback = DEFAULT_PROVIDER_SETTINGS.openrouter.baseUrl ?? 'https://openrouter.ai/api/v1'
     return normalizeBaseUrl(providerConfigs?.openrouter?.baseUrl, fallback)
   }, [providerConfigs?.openrouter?.baseUrl])
+
+  const qdrantBaseUrl = useMemo(() => {
+    const fallback = DEFAULT_PROVIDER_SETTINGS.qdrant?.baseUrl ?? 'http://localhost:6333'
+    return normalizeBaseUrl(providerConfigs?.qdrant?.baseUrl, fallback)
+  }, [providerConfigs?.qdrant?.baseUrl])
 
   const handleAgentConfigChange = useCallback(
     <Field extends keyof AgentConfig>(
@@ -293,6 +307,45 @@ export function useAgentSettingsState({
     }
   }, [defaultReferer, openRouterBaseUrl, providerConfigs?.openrouter])
 
+  const probeQdrant = useCallback(async () => {
+    if (!qdrantBaseUrl) {
+      setQdrantStatus('error')
+      setQdrantMessage('Qdrant base URL is not configured')
+      return
+    }
+
+    setQdrantLoading(true)
+    setQdrantMessage(null)
+
+    try {
+      const response = await fetch(`${qdrantBaseUrl}/collections`, {
+        headers: providerConfigs?.qdrant?.apiKey
+          ? { 'api-key': providerConfigs.qdrant.apiKey }
+          : undefined
+      })
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`)
+      }
+
+      setQdrantStatus('ready')
+      const payload = (await response.json()) as { collections?: unknown[] }
+      const count = Array.isArray(payload.collections) ? payload.collections.length : undefined
+      setQdrantMessage(
+        count !== undefined
+          ? `Detected ${count} collections at ${qdrantBaseUrl}`
+          : `Connected to ${qdrantBaseUrl}`
+      )
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to reach Qdrant'
+      console.error('Failed to probe Qdrant', error)
+      setQdrantStatus('error')
+      setQdrantMessage(message)
+    } finally {
+      setQdrantLoading(false)
+    }
+  }, [providerConfigs?.qdrant?.apiKey, qdrantBaseUrl])
+
   useEffect(() => {
     if (providerConfigs?.ollama?.baseUrl) {
       void fetchOllamaModels()
@@ -304,6 +357,15 @@ export function useAgentSettingsState({
       void fetchOpenRouterModels()
     }
   }, [providerConfigs?.openrouter?.apiKey, fetchOpenRouterModels])
+
+  useEffect(() => {
+    if (providerConfigs?.qdrant?.baseUrl) {
+      void probeQdrant()
+    } else {
+      setQdrantStatus('unknown')
+      setQdrantMessage(null)
+    }
+  }, [providerConfigs?.qdrant?.baseUrl, probeQdrant])
 
   const resetToDefaults = useCallback(() => {
     const defaultAgents = cloneAgentDefaults()
@@ -365,6 +427,11 @@ export function useAgentSettingsState({
     openRouterError,
     ollamaBaseUrl,
     openRouterBaseUrl,
+    qdrantBaseUrl,
+    qdrantStatus,
+    qdrantLoading,
+    qdrantMessage,
+    probeQdrant,
     handleAgentConfigChange,
     handleProviderConfigChange,
     handleAutonomousConfigChange,

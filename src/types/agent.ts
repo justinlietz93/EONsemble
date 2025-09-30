@@ -35,11 +35,18 @@ export interface OllamaProviderSettings {
   baseUrl?: string
 }
 
+export interface QdrantProviderSettings {
+  baseUrl?: string
+  apiKey?: string
+  collection?: string
+}
+
 export interface ProviderSettings {
   spark: SparkProviderSettings
   openai: OpenAIProviderSettings
   openrouter: OpenRouterProviderSettings
   ollama: OllamaProviderSettings
+  qdrant: QdrantProviderSettings
 }
 
 export const DEFAULT_PROVIDER_SETTINGS: ProviderSettings = {
@@ -53,5 +60,8 @@ export const DEFAULT_PROVIDER_SETTINGS: ProviderSettings = {
   },
   ollama: {
     baseUrl: 'http://localhost:11434'
+  },
+  qdrant: {
+    baseUrl: 'http://localhost:6333'
   }
 }

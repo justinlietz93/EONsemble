@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
 import { useKV } from '@/hooks/useKV'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Badge } from '@/components/ui/badge'
@@ -9,6 +9,22 @@ import { KnowledgeBase } from '@/components/KnowledgeBase'
 import { DerivationHistory } from '@/components/DerivationHistory'
 import { AgentSettings } from '@/components/AgentSettings'
 import { useVoidMemoryBridge } from '@/hooks/useVoidMemoryBridge'
+import { useSessionDiagnostics } from '@/hooks/useSessionDiagnostics'
+
+const SESSION_TAB_KEY = 'eon.activeTab'
+
+const resolveInitialActiveTab = (): string => {
+  if (typeof window === 'undefined') {
+    return 'goal-setup'
+  }
+
+  const sessionValue = window.sessionStorage?.getItem(SESSION_TAB_KEY)
+  if (sessionValue && sessionValue.trim().length > 0) {
+    return sessionValue
+  }
+
+  return 'goal-setup'
+}
 
 export interface PhysicsGoal {
   id: string
@@ -39,7 +55,7 @@ export interface KnowledgeEntry {
 }
 
 function App() {
-  const [activeTab, setActiveTab] = useState('goal-setup')
+  const [activeTab, setActiveTab] = useKV<string>('active-tab', resolveInitialActiveTab)
   const [goals, setGoals] = useKV<PhysicsGoal[]>('physics-goals', [])
   const [activeGoal, setActiveGoal] = useKV<string | null>('active-goal', null)
   const [derivationHistory, setDerivationHistory] = useKV<AgentResponse[]>('derivation-history', [])
@@ -48,7 +64,62 @@ function App() {
   const currentGoal = goals?.find(g => g.id === activeGoal)
   const hasActiveGoal = Boolean(currentGoal)
 
+  const lastNonLaunchTabRef = useRef<string>('goal-setup')
+  const goalTabAllowanceRef = useRef(false)
+
+  const handleActiveTabChange = useCallback(
+    (nextTab: string) => {
+      if (nextTab === 'goal-setup') {
+        goalTabAllowanceRef.current = true
+      } else {
+        lastNonLaunchTabRef.current = nextTab
+      }
+      setActiveTab(nextTab)
+    },
+    [setActiveTab]
+  )
+
+  useEffect(() => {
+    if (activeTab !== 'goal-setup') {
+      lastNonLaunchTabRef.current = activeTab
+      goalTabAllowanceRef.current = false
+      return
+    }
+
+    if (goalTabAllowanceRef.current) {
+      goalTabAllowanceRef.current = false
+      return
+    }
+
+    const fallbackTab = lastNonLaunchTabRef.current
+    if (fallbackTab && fallbackTab !== 'goal-setup') {
+      console.warn(`Restoring active tab to ${fallbackTab} after unexpected reset`)
+      goalTabAllowanceRef.current = true
+      setActiveTab(fallbackTab)
+    }
+  }, [activeTab, setActiveTab])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return
+    }
+
+    try {
+      window.sessionStorage.setItem(SESSION_TAB_KEY, activeTab)
+    } catch (error) {
+      console.warn('Failed to persist active tab to sessionStorage', error)
+    }
+  }, [activeTab])
+
   useVoidMemoryBridge(currentGoal, derivationHistory || [], knowledgeBase || [])
+  useSessionDiagnostics(activeTab, {
+    activeGoalId: activeGoal || null,
+    knowledgeEntryCount: knowledgeBase?.length ?? 0,
+    knowledgeSample: (knowledgeBase || []).slice(0, 5).map((entry) => ({
+      id: entry.id,
+      title: entry.title,
+    })),
+  })
 
   return (
     <div className="min-h-screen bg-background">
@@ -79,7 +150,7 @@ function App() {
       </div>
 
       <div className="container mx-auto px-6 py-8">
-        <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
+        <Tabs value={activeTab} onValueChange={handleActiveTabChange} className="space-y-6">
           <TabsList className="grid grid-cols-5 w-full">
             <TabsTrigger value="goal-setup" className="flex items-center gap-2">
               <Target className="h-4 w-4" />
@@ -104,12 +175,12 @@ function App() {
           </TabsList>
 
           <TabsContent value="goal-setup">
-            <GoalSetup 
+            <GoalSetup
               goals={goals || []}
               setGoals={setGoals}
               activeGoal={activeGoal || null}
               setActiveGoal={setActiveGoal}
-              onGoalActivated={() => setActiveTab('collaboration')}
+              onGoalActivated={() => handleActiveTabChange('collaboration')}
             />
           </TabsContent>
 

@@ -77,3 +77,26 @@ re-initialization, and collaboration history replay.
     `reports/drills/` for auditing.
   - Review `reports/drills/history.jsonl` to track previous drill outcomes and
     ensure anomalies are investigated promptly.
+
+## Appendix A – Frontend Persistence Notes
+
+- The React `useKV` hook now keeps an in-memory cache authoritative whenever the
+  persistence API is unreachable. Failed hydration attempts no longer overwrite
+  populated knowledge arrays; the hook only falls back to defaults when no
+  memory is present.
+- When investigating suspected regressions, reproduce the offline scenario by
+  mocking `fetchPersistedValue` to resolve `undefined` and verify that
+  previously added entries remain visible.
+- Run `npx vitest run tests/hooks/useKV.test.tsx` to execute the dedicated hook
+  regression suite that covers both the offline fallback and successful server
+  hydration flows.
+- If the persistence API hydrates `null` for a key whose default is non-null,
+  `useKV` now emits a warning and restores the configured fallback. Validate the
+  frontend behaviour with `npx vitest run tests/components/app.knowledge-persistence.test.tsx`,
+  which includes a regression covering the null-hydration scenario.
+- Session reset diagnostics can be enabled via
+  `window.localStorage.setItem('eon.debugSessionTrace', 'true')`. The enhanced
+  `useSessionDiagnostics` hook logs mounts, unmounts, and unexpected tab resets
+  together with the active goal ID and a sampled knowledge payload. Exercise the
+  behaviour with `npx vitest run tests/hooks/useSessionDiagnostics.test.tsx` to
+  confirm logging stays consistent.

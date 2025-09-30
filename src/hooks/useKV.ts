@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { fetchPersistedValue, savePersistedValue } from '@/lib/api/persistence'
 
@@ -20,23 +20,43 @@ const ensureMemoryValue = <T,>(key: string, fallback: T): T => {
 
 export function useKV<T>(key: string, defaultValue: InitialValue<T>): [T, (value: Updater<T>) => void] {
   const keyRef = useRef(key)
-  keyRef.current = key
+  const defaultSourceRef = useRef<InitialValue<T>>(defaultValue)
+  const defaultValueRef = useRef<T>(resolveInitial(defaultValue))
 
-  const resolvedDefault = useMemo(() => resolveInitial(defaultValue), [defaultValue])
+  if (keyRef.current !== key || defaultSourceRef.current !== defaultValue) {
+    keyRef.current = key
+    defaultSourceRef.current = defaultValue
+    defaultValueRef.current = resolveInitial(defaultValue)
+  }
 
-  const [value, setValue] = useState<T>(() => ensureMemoryValue(key, resolvedDefault))
+  const [value, setValue] = useState<T>(() => ensureMemoryValue(keyRef.current, defaultValueRef.current))
 
   useEffect(() => {
     let cancelled = false
 
     const load = async () => {
       const stored = await fetchPersistedValue<T>(key)
-      if (stored === undefined) {
-        memoryStore.set(key, resolvedDefault)
-        await savePersistedValue(key, resolvedDefault)
-        if (!cancelled) {
-          setValue(resolvedDefault)
+
+      const fallback = defaultValueRef.current
+
+      if (stored === undefined || (stored === null && fallback !== null)) {
+        if (!memoryStore.has(key)) {
+          memoryStore.set(key, fallback)
+          await savePersistedValue(key, fallback)
+          if (!cancelled) {
+            setValue(fallback)
+          }
+        } else if (!cancelled) {
+          setValue(memoryStore.get(key) as T)
         }
+
+        if (stored === null && fallback !== null) {
+          console.warn(
+            `[useKV] Received null for key "${key}"; falling back to default value. ` +
+              'Consider ensuring the persistence layer does not emit null for this key.'
+          )
+        }
+
         return
       }
 
@@ -51,7 +71,7 @@ export function useKV<T>(key: string, defaultValue: InitialValue<T>): [T, (value
     return () => {
       cancelled = true
     }
-  }, [key, resolvedDefault])
+  }, [key])
 
   const update = useCallback(
     (nextValue: Updater<T>) => {
