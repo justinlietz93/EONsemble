@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
 import { AgentResponse, PhysicsGoal, KnowledgeEntry } from '@/App'
+import type { KVUpdater } from '@/hooks/useKV'
 import { AgentConfig, ProviderSettings } from '@/types/agent'
 import { AutonomousConfig, AutonomousStopOptions } from '@/types/autonomous'
 import { toast } from 'sonner'
@@ -29,9 +30,9 @@ function isWithinActiveWindow(config: AutonomousConfig): boolean {
 export interface AutonomousEngineProps {
   goal: PhysicsGoal
   derivationHistory: AgentResponse[]
-  setDerivationHistory: (updater: (prev: AgentResponse[]) => AgentResponse[]) => void
+  setDerivationHistory: (updater: KVUpdater<AgentResponse[]>) => void
   knowledgeBase: KnowledgeEntry[]
-  setKnowledgeBase: (updater: (prev: KnowledgeEntry[]) => KnowledgeEntry[]) => void
+  setKnowledgeBase: (updater: KVUpdater<KnowledgeEntry[]>) => void
   agentConfigs: AgentConfig[]
   providerConfigs: ProviderSettings
   autonomousConfig: AutonomousConfig

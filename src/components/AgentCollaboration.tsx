@@ -3,6 +3,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { ArrowCounterClockwise, Brain } from '@phosphor-icons/react'
 import { PhysicsGoal, AgentResponse, KnowledgeEntry } from '@/App'
+import type { KVUpdater } from '@/hooks/useKV'
 import type { AutonomousConfig, AutonomousStopOptions } from '@/types/autonomous'
 import { DEFAULT_AUTONOMOUS_CONFIG } from '@/types/autonomous'
 import { AgentConfig, ProviderSettings, DEFAULT_PROVIDER_SETTINGS } from '@/types/agent'
@@ -15,9 +16,9 @@ import { DerivationDisplay } from '@/components/DerivationDisplay'
 interface AgentCollaborationProps {
   goal: PhysicsGoal | undefined
   derivationHistory: AgentResponse[]
-  setDerivationHistory: (updater: (prev: AgentResponse[]) => AgentResponse[]) => void
+  setDerivationHistory: (updater: KVUpdater<AgentResponse[]>) => void
   knowledgeBase: KnowledgeEntry[]
-  setKnowledgeBase: (updater: (prev: KnowledgeEntry[]) => KnowledgeEntry[]) => void
+  setKnowledgeBase: (updater: KVUpdater<KnowledgeEntry[]>) => void
 }
 
 export function AgentCollaboration({ 

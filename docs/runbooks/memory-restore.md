@@ -94,6 +94,13 @@ re-initialization, and collaboration history replay.
   `useKV` now emits a warning and restores the configured fallback. Validate the
   frontend behaviour with `npx vitest run tests/components/app.knowledge-persistence.test.tsx`,
   which includes a regression covering the null-hydration scenario.
+- Knowledge setters (`setKnowledgeBase`, `setDerivationHistory`, etc.) must now
+  receive the `useKV` dispatcher directly. Components append entries via
+  functional updates (`prev => [...prev, entry]`) to avoid stale-closure races
+  when uploads complete while navigation occurs. The corpus upload guard within
+  `tests/components/app.knowledge-persistence.test.tsx` exercises this path by
+  uploading, tab-hopping immediately, and verifying both the persisted payload
+  and UI state remain intact.
 - Session reset diagnostics can be enabled via
   `window.localStorage.setItem('eon.debugSessionTrace', 'true')`. The enhanced
   `useSessionDiagnostics` hook logs mounts, unmounts, and unexpected tab resets

@@ -9,6 +9,10 @@ interface HarnessProps {
     knowledgeEntryCount: number
     knowledgeSample: Array<{ id: string; title: string }>
   }
+  metadata?: {
+    tabChangeReason?: string
+    lastDetectedReset?: string
+  }
 }
 
 declare global {
@@ -17,8 +21,8 @@ declare global {
   }
 }
 
-function Harness({ tab, snapshot }: HarnessProps) {
-  useSessionDiagnostics(tab, snapshot)
+function Harness({ tab, snapshot, metadata }: HarnessProps) {
+  useSessionDiagnostics(tab, snapshot, metadata)
   return null
 }
 
@@ -49,6 +53,10 @@ describe('useSessionDiagnostics', () => {
             { id: 'k-2', title: 'Beta' },
           ],
         }}
+        metadata={{
+          tabChangeReason: 'user-selection',
+          lastDetectedReset: 'none',
+        }}
       />
     )
 
@@ -60,6 +68,8 @@ describe('useSessionDiagnostics', () => {
     expect(infoMessages.some(message => message.includes('goal=goal-123'))).toBe(true)
     expect(infoMessages.some(message => message.includes('knowledgeCount=2'))).toBe(true)
     expect(infoMessages.some(message => message.includes('sample=[k-1:Alpha, k-2:Beta]'))).toBe(true)
+    expect(infoMessages.some(message => message.includes('reason=user-selection'))).toBe(true)
+    expect(infoMessages.some(message => message.includes('lastReset=none'))).toBe(true)
     expect(warnSpy).not.toHaveBeenCalled()
   })
 
@@ -79,6 +89,10 @@ describe('useSessionDiagnostics', () => {
             { id: 'k-12', title: 'Epsilon' },
           ],
         }}
+        metadata={{
+          tabChangeReason: 'user-selection',
+          lastDetectedReset: 'none',
+        }}
       />
     )
 
@@ -94,6 +108,10 @@ describe('useSessionDiagnostics', () => {
           knowledgeEntryCount: 1,
           knowledgeSample: [{ id: 'k-20', title: 'Zeta' }],
         }}
+        metadata={{
+          tabChangeReason: 'persistence-reset',
+          lastDetectedReset: 'persistence-reset',
+        }}
       />
     )
 
@@ -105,6 +123,8 @@ describe('useSessionDiagnostics', () => {
       expect((resetCall?.[0] as string) ?? '').toContain('goal=none')
       expect((resetCall?.[0] as string) ?? '').toContain('knowledgeCount=1')
       expect((resetCall?.[0] as string) ?? '').toContain('sample=[k-20:Zeta]')
+      expect((resetCall?.[0] as string) ?? '').toContain('reason=persistence-reset')
+      expect((resetCall?.[0] as string) ?? '').toContain('lastReset=persistence-reset')
     })
   })
 })

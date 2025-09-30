@@ -2,6 +2,7 @@ import '@testing-library/jest-dom/vitest'
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 
 import { useState } from 'react'
 
@@ -9,6 +10,13 @@ import App from '@/App'
 import { KnowledgeBase } from '@/components/KnowledgeBase'
 import type { KnowledgeEntry } from '@/App'
 import { clearKVStore, useKV } from '@/hooks/useKV'
+
+vi.mock('sonner', () => ({
+  toast: {
+    success: vi.fn(),
+    error: vi.fn()
+  }
+}))
 
 class ResizeObserverMock implements ResizeObserver {
   observe(): void {}
@@ -109,6 +117,44 @@ describe('Knowledge base persistence behaviour', () => {
     vi.restoreAllMocks()
     vi.stubGlobal('fetch', buildFetchMock())
     vi.stubGlobal('ResizeObserver', ResizeObserverMock)
+
+    class FileReaderStub implements Partial<FileReader> {
+      public result: string | ArrayBuffer | null = null
+      public readyState = 2
+      public onload: ((this: FileReader, ev: ProgressEvent<FileReader>) => void) | null = null
+      public onerror: ((this: FileReader, ev: ProgressEvent<FileReader>) => void) | null = null
+
+      private emitResult(result: string | ArrayBuffer): void {
+        this.result = result
+        if (this.onload) {
+          const event = {
+            target: { result }
+          } as ProgressEvent<FileReader>
+          this.onload.call(this as unknown as FileReader, event)
+        }
+      }
+
+      readAsText(blob: Blob): void {
+        const name = (blob as File).name ?? 'mock-file'
+        const text = `Mock content from ${name} `.repeat(8)
+        queueMicrotask(() => this.emitResult(text))
+      }
+
+      readAsArrayBuffer(blob: Blob): void {
+        const buffer = new ArrayBuffer(8)
+        new Uint8Array(buffer).set([1, 2, 3, 4, 5, 6, 7, 8])
+        queueMicrotask(() => this.emitResult(buffer))
+      }
+
+      abort(): void {}
+      addEventListener(): void {}
+      removeEventListener(): void {}
+      dispatchEvent(): boolean {
+        return true
+      }
+    }
+
+    vi.stubGlobal('FileReader', FileReaderStub as unknown as typeof FileReader)
 
     const storageMock = () => {
       let store: Record<string, string> = {}
@@ -248,5 +294,101 @@ describe('Knowledge base persistence behaviour', () => {
     const entriesAfterReload = within(reloadedContainer).queryAllByText(/sample physics knowledge/i)
 
     expect(entriesAfterReload.length).toBeGreaterThan(0)
+  })
+
+  it('retains corpus-uploaded knowledge after switching tabs (currently failing)', async () => {
+    sessionStorage.setItem('eon.activeTab', 'knowledge')
+
+    const persistedStore = new Map<string, unknown>()
+
+    const statefulFetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input.toString()
+      const method = init?.method ?? 'GET'
+
+      if (url.includes('/api/state/')) {
+        const key = decodeURIComponent(url.split('/api/state/')[1] ?? '')
+
+        if (method === 'PUT') {
+          const body = typeof init?.body === 'string' ? init.body : ''
+          let value: unknown = null
+          try {
+            value = JSON.parse(body || '{}').value ?? null
+          } catch {
+            value = null
+          }
+          persistedStore.set(key, value)
+          return new Response(JSON.stringify({ value }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' }
+          })
+        }
+
+        if (method === 'GET') {
+          if (!persistedStore.has(key)) {
+            return new Response(JSON.stringify({ value: null }), {
+              status: 404,
+              headers: { 'Content-Type': 'application/json' }
+            })
+          }
+
+          return new Response(JSON.stringify({ value: persistedStore.get(key) ?? null }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' }
+          })
+        }
+      }
+
+      return buildFetchMock()(input, init)
+    })
+
+    vi.stubGlobal('fetch', statefulFetch)
+
+    render(<App />)
+
+    const knowledgeHeading = await screen.findByRole('heading', { name: /knowledge base/i })
+    const knowledgeView = knowledgeHeading.closest('div')?.parentElement?.parentElement ?? document.body
+
+    const user = userEvent.setup()
+    const uploadTab = within(knowledgeView).getByRole('tab', { name: /upload corpus/i })
+    await user.click(uploadTab)
+
+    await waitFor(() => {
+      expect(document.getElementById('file-upload')).not.toBeNull()
+    })
+
+    const fileInput = document.getElementById('file-upload') as HTMLInputElement
+
+    const sampleFile = new File([
+      'Quantum field theory insights for persistence verification '.repeat(20)
+    ], 'quantum-notes.txt', { type: 'text/plain' })
+
+    await user.upload(fileInput, sampleFile)
+
+    const goalSetupTab = screen.getByRole('tab', { name: /goal setup/i })
+    await user.click(goalSetupTab)
+
+    const knowledgeTab = screen.getByRole('tab', { name: /knowledge base/i })
+    await user.click(knowledgeTab)
+
+    const reenteredHeading = await screen.findByRole('heading', { name: /knowledge base/i })
+    const reenteredView = reenteredHeading.closest('div')?.parentElement?.parentElement ?? document.body
+
+    const browseTab = within(reenteredView).getByRole('tab', { name: /browse/i })
+    await user.click(browseTab)
+
+    await waitFor(() => {
+      const stored = persistedStore.get('knowledge-base') as unknown[] | undefined
+      expect(Array.isArray(stored) && stored.length > 0).toBe(true)
+    })
+
+    await waitFor(() => {
+      expect(
+        within(reenteredView).getByText(/quantum-notes.txt - section 1/i)
+      ).toBeInTheDocument()
+    })
+
+    const entriesAfterSwitch = within(reenteredView).queryAllByText(/quantum-notes.txt - section 1/i)
+
+    expect(entriesAfterSwitch.length).toBeGreaterThan(0)
   })
 })

@@ -66,6 +66,10 @@ function App() {
 
   const lastNonLaunchTabRef = useRef<string>('goal-setup')
   const goalTabAllowanceRef = useRef(false)
+  const tabChangeReasonRef = useRef<'initial-load' | 'user-selection' | 'auto-restore' | 'persistence-reset'>('initial-load')
+  const lastDetectedResetRef = useRef<'none' | 'persistence-reset' | 'restored'>('none')
+  const pendingTabChangeReasonRef = useRef<'user-selection' | 'auto-restore' | null>(null)
+  const previousActiveTabRef = useRef<string>(activeTab)
 
   const handleActiveTabChange = useCallback(
     (nextTab: string) => {
@@ -73,14 +77,35 @@ function App() {
         goalTabAllowanceRef.current = true
       } else {
         lastNonLaunchTabRef.current = nextTab
+        goalTabAllowanceRef.current = false
       }
+      tabChangeReasonRef.current = 'user-selection'
+      pendingTabChangeReasonRef.current = 'user-selection'
       setActiveTab(nextTab)
     },
     [setActiveTab]
   )
 
   useEffect(() => {
+    if (pendingTabChangeReasonRef.current) {
+      tabChangeReasonRef.current = pendingTabChangeReasonRef.current
+      pendingTabChangeReasonRef.current = null
+    } else if (previousActiveTabRef.current !== activeTab && activeTab === 'goal-setup') {
+      tabChangeReasonRef.current = 'persistence-reset'
+    }
+
+    previousActiveTabRef.current = activeTab
+  }, [activeTab])
+
+  useEffect(() => {
     if (activeTab !== 'goal-setup') {
+      if (lastDetectedResetRef.current === 'persistence-reset') {
+        lastDetectedResetRef.current = 'restored'
+      } else if (lastDetectedResetRef.current === 'restored') {
+        lastDetectedResetRef.current = 'none'
+      } else {
+        lastDetectedResetRef.current = 'none'
+      }
       lastNonLaunchTabRef.current = activeTab
       goalTabAllowanceRef.current = false
       return
@@ -91,12 +116,18 @@ function App() {
       return
     }
 
+    lastDetectedResetRef.current = 'persistence-reset'
     const fallbackTab = lastNonLaunchTabRef.current
     if (fallbackTab && fallbackTab !== 'goal-setup') {
       console.warn(`Restoring active tab to ${fallbackTab} after unexpected reset`)
       goalTabAllowanceRef.current = true
+      tabChangeReasonRef.current = 'auto-restore'
+      pendingTabChangeReasonRef.current = 'auto-restore'
       setActiveTab(fallbackTab)
+      return
     }
+
+    tabChangeReasonRef.current = 'persistence-reset'
   }, [activeTab, setActiveTab])
 
   useEffect(() => {
@@ -112,6 +143,14 @@ function App() {
   }, [activeTab])
 
   useVoidMemoryBridge(currentGoal, derivationHistory || [], knowledgeBase || [])
+  const unexpectedReset = activeTab === 'goal-setup' && !goalTabAllowanceRef.current
+  const derivedTabChangeReason = unexpectedReset
+    ? 'persistence-reset'
+    : tabChangeReasonRef.current
+  const derivedLastDetectedReset = unexpectedReset
+    ? 'persistence-reset'
+    : lastDetectedResetRef.current
+
   useSessionDiagnostics(activeTab, {
     activeGoalId: activeGoal || null,
     knowledgeEntryCount: knowledgeBase?.length ?? 0,
@@ -119,6 +158,9 @@ function App() {
       id: entry.id,
       title: entry.title,
     })),
+  }, {
+    tabChangeReason: derivedTabChangeReason,
+    lastDetectedReset: derivedLastDetectedReset,
   })
 
   return (
@@ -185,24 +227,12 @@ function App() {
           </TabsContent>
 
           <TabsContent value="collaboration">
-            <AgentCollaboration 
+            <AgentCollaboration
               goal={currentGoal}
               derivationHistory={derivationHistory || []}
-              setDerivationHistory={(updater) => {
-                if (typeof updater === 'function') {
-                  setDerivationHistory(updater(derivationHistory || []))
-                } else {
-                  setDerivationHistory(updater)
-                }
-              }}
+              setDerivationHistory={setDerivationHistory}
               knowledgeBase={knowledgeBase || []}
-              setKnowledgeBase={(updater) => {
-                if (typeof updater === 'function') {
-                  setKnowledgeBase(updater(knowledgeBase || []))
-                } else {
-                  setKnowledgeBase(updater)
-                }
-              }}
+              setKnowledgeBase={setKnowledgeBase}
             />
           </TabsContent>
 

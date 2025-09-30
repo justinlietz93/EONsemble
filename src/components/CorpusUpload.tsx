@@ -16,11 +16,12 @@ import {
   Clock
 } from '@phosphor-icons/react'
 import { KnowledgeEntry } from '@/App'
+import type { KVUpdater } from '@/hooks/useKV'
 import { toast } from 'sonner'
 
 interface CorpusUploadProps {
   knowledgeBase: KnowledgeEntry[]
-  setKnowledgeBase: (knowledge: KnowledgeEntry[]) => void
+  setKnowledgeBase: (knowledge: KVUpdater<KnowledgeEntry[]>) => void
 }
 
 interface UploadedFile {
@@ -145,7 +146,10 @@ export function CorpusUpload({ knowledgeBase, setKnowledgeBase }: CorpusUploadPr
       ))
 
       // Add to knowledge base
-      setKnowledgeBase([...(knowledgeBase || []), ...chunks])
+      setKnowledgeBase(prev => [
+        ...((Array.isArray(prev) ? prev : [])),
+        ...chunks
+      ])
       
       // Mark as completed
       setFiles(prev => prev.map(f => 
@@ -164,7 +168,7 @@ export function CorpusUpload({ knowledgeBase, setKnowledgeBase }: CorpusUploadPr
       ))
       toast.error(`Failed to process ${uploadedFile.file.name}`)
     }
-  }, [knowledgeBase, setKnowledgeBase])
+  }, [setKnowledgeBase])
 
   const handleDrop = useCallback(async (e: React.DragEvent) => {
     e.preventDefault()

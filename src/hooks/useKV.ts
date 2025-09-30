@@ -5,6 +5,8 @@ import { fetchPersistedValue, savePersistedValue } from '@/lib/api/persistence'
 type InitialValue<T> = T | (() => T)
 type Updater<T> = T | ((previous: T) => T)
 
+export type KVUpdater<T> = Updater<T>
+
 const memoryStore = new Map<string, unknown>()
 
 const resolveInitial = <T,>(value: InitialValue<T>): T =>

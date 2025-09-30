@@ -19,12 +19,24 @@ type SessionSnapshot = {
   knowledgeSample: Array<{ id: string; title: string }>
 }
 
+type SessionMetadata = {
+  tabChangeReason?: string
+  lastDetectedReset?: string
+}
+
+type SessionHistoryEntry = {
+  tab: string
+  at: string
+  reason?: string
+  lastReset?: string
+}
+
 type SessionTrace = {
   mounts: number
   unmounts: number
   resets: number
-  history: Array<{ tab: string; at: string }>
-  snapshots: Array<SessionSnapshot & { tab: string; at: string }>
+  history: SessionHistoryEntry[]
+  snapshots: Array<SessionSnapshot & SessionHistoryEntry>
 }
 
 declare global {
@@ -45,6 +57,22 @@ const ensureTrace = (): SessionTrace => {
   return window.__EONSessionTrace
 }
 
+const formatReason = (reason?: string): string => {
+  if (!reason || reason.trim().length === 0) {
+    return 'unknown'
+  }
+
+  return reason
+}
+
+const formatLastReset = (lastReset?: string): string => {
+  if (!lastReset || lastReset.trim().length === 0 || lastReset === 'none') {
+    return 'none'
+  }
+
+  return lastReset
+}
+
 const formatKnowledgeSample = (sample: SessionSnapshot['knowledgeSample']): string => {
   if (sample.length === 0) {
     return '[]'
@@ -56,13 +84,22 @@ const formatKnowledgeSample = (sample: SessionSnapshot['knowledgeSample']): stri
   return `[${entries.join(', ')}${suffix}]`
 }
 
-export function useSessionDiagnostics(activeTab: string, snapshot: SessionSnapshot): void {
+export function useSessionDiagnostics(
+  activeTab: string,
+  snapshot: SessionSnapshot,
+  metadata?: SessionMetadata
+): void {
   const previousTab = useRef<string>('')
   const latestSnapshot = useRef<SessionSnapshot>(snapshot)
+  const latestMetadata = useRef<SessionMetadata>({})
 
   useEffect(() => {
     latestSnapshot.current = snapshot
   }, [snapshot])
+
+  useEffect(() => {
+    latestMetadata.current = metadata ?? {}
+  }, [metadata])
 
   useEffect(() => {
     if (!isDebugEnabled()) {
@@ -71,20 +108,37 @@ export function useSessionDiagnostics(activeTab: string, snapshot: SessionSnapsh
 
     const trace = ensureTrace()
     trace.mounts += 1
-    trace.history.push({ tab: activeTab, at: new Date().toISOString() })
+    const now = new Date().toISOString()
     const snapshotForLog = latestSnapshot.current
-    trace.snapshots.push({ tab: activeTab, at: new Date().toISOString(), ...snapshotForLog })
+    const metadataForLog = latestMetadata.current
+    const historyEntry: SessionHistoryEntry = {
+      tab: activeTab,
+      at: now,
+      reason: metadataForLog.tabChangeReason,
+      lastReset: metadataForLog.lastDetectedReset
+    }
+    trace.history.push(historyEntry)
+    trace.snapshots.push({ ...historyEntry, ...snapshotForLog })
     console.info(
-      `[SessionTrace] App mounted (count=${trace.mounts}) -> activeTab=${activeTab} | goal=${snapshotForLog.activeGoalId ?? 'none'} | knowledgeCount=${snapshotForLog.knowledgeEntryCount} | sample=${formatKnowledgeSample(snapshotForLog.knowledgeSample)}`
+      `[SessionTrace] App mounted (count=${trace.mounts}) -> activeTab=${activeTab} | goal=${snapshotForLog.activeGoalId ?? 'none'} | knowledgeCount=${snapshotForLog.knowledgeEntryCount} | sample=${formatKnowledgeSample(snapshotForLog.knowledgeSample)} | reason=${formatReason(metadataForLog.tabChangeReason)} | lastReset=${formatLastReset(metadataForLog.lastDetectedReset)}`
     )
 
     return () => {
       const currentTrace = ensureTrace()
       currentTrace.unmounts += 1
       const snapshotForLog = latestSnapshot.current
-      currentTrace.snapshots.push({ tab: activeTab, at: new Date().toISOString(), ...snapshotForLog })
+      const metadataForLog = latestMetadata.current
+      const now = new Date().toISOString()
+      const historyEntry: SessionHistoryEntry = {
+        tab: activeTab,
+        at: now,
+        reason: metadataForLog.tabChangeReason,
+        lastReset: metadataForLog.lastDetectedReset
+      }
+      currentTrace.history.push(historyEntry)
+      currentTrace.snapshots.push({ ...historyEntry, ...snapshotForLog })
       console.warn(
-        `[SessionTrace] App unmounted (count=${currentTrace.unmounts}) -> lastTab=${activeTab} | goal=${snapshotForLog.activeGoalId ?? 'none'} | knowledgeCount=${snapshotForLog.knowledgeEntryCount} | sample=${formatKnowledgeSample(snapshotForLog.knowledgeSample)}`
+        `[SessionTrace] App unmounted (count=${currentTrace.unmounts}) -> lastTab=${activeTab} | goal=${snapshotForLog.activeGoalId ?? 'none'} | knowledgeCount=${snapshotForLog.knowledgeEntryCount} | sample=${formatKnowledgeSample(snapshotForLog.knowledgeSample)} | reason=${formatReason(metadataForLog.tabChangeReason)} | lastReset=${formatLastReset(metadataForLog.lastDetectedReset)}`
       )
     }
   }, [activeTab])
@@ -101,13 +155,20 @@ export function useSessionDiagnostics(activeTab: string, snapshot: SessionSnapsh
     if (prior && prior !== activeTab && activeTab === 'goal-setup') {
       trace.resets += 1
       const snapshotForLog = latestSnapshot.current
+      const metadataForLog = latestMetadata.current
       console.warn(
-        `[SessionTrace] Active tab reset from ${prior} -> ${activeTab} (resets=${trace.resets}) | goal=${snapshotForLog.activeGoalId ?? 'none'} | knowledgeCount=${snapshotForLog.knowledgeEntryCount} | sample=${formatKnowledgeSample(snapshotForLog.knowledgeSample)}`
+        `[SessionTrace] Active tab reset from ${prior} -> ${activeTab} (resets=${trace.resets}) | goal=${snapshotForLog.activeGoalId ?? 'none'} | knowledgeCount=${snapshotForLog.knowledgeEntryCount} | sample=${formatKnowledgeSample(snapshotForLog.knowledgeSample)} | reason=${formatReason(metadataForLog.tabChangeReason)} | lastReset=${formatLastReset(metadataForLog.lastDetectedReset)}`
       )
     }
 
     if (!trace.history.some(entry => entry.tab === activeTab)) {
-      trace.history.push({ tab: activeTab, at: new Date().toISOString() })
+      const metadataForLog = latestMetadata.current
+      trace.history.push({
+        tab: activeTab,
+        at: new Date().toISOString(),
+        reason: metadataForLog.tabChangeReason,
+        lastReset: metadataForLog.lastDetectedReset
+      })
     }
 
     previousTab.current = activeTab
