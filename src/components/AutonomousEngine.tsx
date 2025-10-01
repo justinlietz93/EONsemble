@@ -11,12 +11,71 @@ import {
   createAgentResponse,
   createKnowledgeEntry
 } from '@/lib/autonomous'
+import { AgentClientError } from '@/lib/api/agentClient'
 
 export type { AgentName }
 
 const AUTONOMOUS_LOOP_DELAY = 1000
 const ACTIVE_WINDOW_RECHECK_DELAY = 30 * 60 * 1000
 const ACTIVE_HOURS = { start: 7, end: 22 }
+
+type AgentRunState = 'idle' | 'running' | 'success' | 'error'
+
+interface AgentRunError {
+  message: string
+  hint?: string
+}
+
+const shouldDebugAgent = (): boolean => {
+  if (typeof window === 'undefined') {
+    return false
+  }
+
+  try {
+    return window.localStorage.getItem('eon.debugAgent') === 'true'
+  } catch {
+    return false
+  }
+}
+
+const logAgentEvent = (event: string, detail?: Record<string, unknown>): void => {
+  if (!shouldDebugAgent()) {
+    return
+  }
+
+  if (detail) {
+    console.info('[RUN]', event, detail)
+  } else {
+    console.info('[RUN]', event)
+  }
+}
+
+const createRunError = (error: unknown): AgentRunError => {
+  if (error instanceof AgentClientError) {
+    const status = typeof error.status === 'number' ? error.status : null
+    const hint = status
+      ? status >= 500
+        ? 'Check the remote Ollama runtime logs for server-side failures.'
+        : 'Verify the Ollama endpoint URL, credentials, and model availability.'
+      : 'Ensure the Ollama host is reachable from this browser and that CORS is enabled.'
+    return {
+      message: error.message,
+      hint
+    }
+  }
+
+  if (error instanceof Error) {
+    return {
+      message: error.message,
+      hint: 'Check the browser console and network inspector for additional details.'
+    }
+  }
+
+  return {
+    message: 'Unknown agent error',
+    hint: 'Inspect the network panel and application logs for more information.'
+  }
+}
 
 function isWithinActiveWindow(config: AutonomousConfig): boolean {
   if (config.continueOvernight) {
@@ -53,6 +112,8 @@ export function useAutonomousEngine({
   onStop
 }: AutonomousEngineProps) {
   const [isRunning, setIsRunning] = useState(false)
+  const [runState, setRunState] = useState<AgentRunState>('idle')
+  const [runError, setRunError] = useState<AgentRunError | null>(null)
   const [currentAgent, setCurrentAgent] = useState<AgentName>('Phys-Alpha')
   const [currentCycle, setCurrentCycle] = useState(1)
   const autonomousRef = useRef(false)
@@ -77,6 +138,8 @@ export function useAutonomousEngine({
     } else {
       autonomousRef.current = false
       setIsRunning(false)
+      setRunState('idle')
+      setRunError(null)
       clearScheduledTurn()
     }
   }, [autonomousConfig.enabled, clearScheduledTurn])
@@ -88,72 +151,82 @@ export function useAutonomousEngine({
     }
   }, [clearScheduledTurn])
 
-  const processAgentTurn = useCallback(async (agentName: AgentName): Promise<void> => {
-    if (isRunning) {
-      console.log('processAgentTurn called but already running, skipping...')
-      return
-    }
-    
-    console.log('Setting isRunning to true for agent:', agentName)
-    setIsRunning(true)
-    onStatusChange(`${agentName} is working...`)
-    
-    try {
-      console.log('Finding agent config for:', agentName)
-      const agentConfig = agentConfigs.find(config => 
-        config.name === agentName && config.enabled
-      )
-      
-      if (!agentConfig) {
-        throw new Error(`Agent ${agentName} is not configured or disabled`)
+  const processAgentTurn = useCallback(
+    async (agentName: AgentName): Promise<void> => {
+      if (isRunning) {
+        logAgentEvent('skip-turn', { agent: agentName, reason: 'already-running' })
+        return
       }
 
-      console.log('Generating response for agent:', agentName)
-      const response = await generateAgentResponse(
-        agentName,
-        agentConfig,
-        goal,
-        derivationHistory,
-        knowledgeBase,
-        providerConfigs
-      )
-      
-      console.log('Response generated, creating response objects')
-      const newResponse = createAgentResponse(agentName, response, currentCycle, goal.id)
-      const knowledgeEntry = createKnowledgeEntry(
-        agentName,
-        response,
-        currentCycle,
-        goal.title,
-        goal.domain
-      )
-      
-      console.log('Adding response to derivation history')
-      setDerivationHistory(prev => [...prev, newResponse])
-      
-      console.log('Adding knowledge entry')
-      setKnowledgeBase(prev => [...prev, knowledgeEntry])
-      
-      onStatusChange(`${agentName} completed their turn`)
-      console.log('Agent turn completed successfully')
-      
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error'
-      console.error('Error in processAgentTurn:', error)
-      onStatusChange(`Error: ${errorMessage}`)
-      toast.error(`Agent error: ${errorMessage}`)
-      throw error
-    } finally {
-      console.log('Setting isRunning to false')
-      setIsRunning(false)
-    }
-  }, [currentCycle, goal, agentConfigs, derivationHistory, knowledgeBase, providerConfigs, setDerivationHistory, setKnowledgeBase, onStatusChange, isRunning])
+      setIsRunning(true)
+      setRunState('running')
+      setRunError(null)
+      logAgentEvent('start-turn', { agent: agentName, cycle: currentCycle })
+      onStatusChange(`${agentName} is working...`)
+
+      let outcome: 'success' | 'error' = 'success'
+
+      try {
+        const agentConfig = agentConfigs.find(config => config.name === agentName && config.enabled)
+
+        if (!agentConfig) {
+          throw new Error(`Agent ${agentName} is not configured or disabled`)
+        }
+
+        const response = await generateAgentResponse(
+          agentName,
+          agentConfig,
+          goal,
+          derivationHistory,
+          knowledgeBase,
+          providerConfigs
+        )
+
+        const newResponse = createAgentResponse(agentName, response, currentCycle, goal.id)
+        const knowledgeEntry = createKnowledgeEntry(
+          agentName,
+          response,
+          currentCycle,
+          goal.title,
+          goal.domain
+        )
+
+        setDerivationHistory(prev => [...prev, newResponse])
+        setKnowledgeBase(prev => [...prev, knowledgeEntry])
+
+        onStatusChange(`${agentName} completed their turn`)
+        setRunState('success')
+      } catch (error) {
+        outcome = 'error'
+        const normalized = createRunError(error)
+        setRunState('error')
+        setRunError(normalized)
+        onStatusChange(`Error: ${normalized.message}`)
+        toast.error(`Agent error: ${normalized.message}`)
+        logAgentEvent('turn-error', { agent: agentName, message: normalized.message, hint: normalized.hint })
+        throw error
+      } finally {
+        setIsRunning(false)
+        logAgentEvent('finish-turn', { agent: agentName, status: outcome, cycle: currentCycle })
+      }
+    },
+    [
+      agentConfigs,
+      currentCycle,
+      derivationHistory,
+      goal,
+      isRunning,
+      knowledgeBase,
+      onStatusChange,
+      providerConfigs,
+      setDerivationHistory,
+      setKnowledgeBase
+    ]
+  )
 
   const runSingleTurn = useCallback(async (): Promise<void> => {
-    console.log('runSingleTurn called, isRunning:', isRunning)
-
     if (isRunning) {
-      console.log('Already running, returning')
+      logAgentEvent('single-run-skipped', { reason: 'already-running' })
       return
     }
 
@@ -174,15 +247,12 @@ export function useAutonomousEngine({
     const executingAgent = currentAgent
 
     try {
-      console.log('Processing agent turn for:', executingAgent)
       await processAgentTurn(executingAgent)
 
-      console.log('Agent turn completed, getting next agent')
       const { next, newCycle } = getNextAgent(executingAgent, currentCycle)
 
       setCurrentAgent(next)
       setCurrentCycle(newCycle)
-      console.log('Next agent:', next, 'Next cycle:', newCycle)
 
       if (config.stopOnGammaDecision && executingAgent === 'Phys-Gamma') {
         onStatusChange('Phys-Gamma completed oversight. Autonomous mode paused for review.')
@@ -194,7 +264,10 @@ export function useAutonomousEngine({
         }
       }
     } catch (error) {
-      console.error('Agent turn failed:', error)
+      logAgentEvent('single-run-error', {
+        agent: executingAgent,
+        message: error instanceof Error ? error.message : 'unknown'
+      })
       setIsRunning(false)
     }
   }, [
@@ -208,10 +281,11 @@ export function useAutonomousEngine({
   ])
 
   const runAutonomousLoop = useCallback(async (): Promise<void> => {
-    console.log('runAutonomousLoop called, autonomousRef.current:', autonomousRef.current, 'isRunning:', isRunning)
-
     if (!autonomousRef.current || isRunning) {
-      console.log('Conditions not met, returning')
+      logAgentEvent('autonomous-loop-skip', {
+        active: autonomousRef.current,
+        running: isRunning
+      })
       return
     }
 
@@ -229,12 +303,9 @@ export function useAutonomousEngine({
     }
 
     try {
-      console.log('Running single turn...')
       await runSingleTurn()
 
-      // Continue automatically if still in autonomous mode
       if (autonomousRef.current) {
-        console.log('Scheduling next turn...')
         clearScheduledTurn()
         timeoutRef.current = setTimeout(() => {
           if (autonomousRef.current) {
@@ -243,7 +314,9 @@ export function useAutonomousEngine({
         }, AUTONOMOUS_LOOP_DELAY)
       }
     } catch (error) {
-      console.error('Autonomous loop error:', error)
+      logAgentEvent('autonomous-loop-error', {
+        message: error instanceof Error ? error.message : 'unknown'
+      })
       autonomousRef.current = false
       clearScheduledTurn()
       onStop({ silent: true, reason: 'error' })
@@ -251,13 +324,8 @@ export function useAutonomousEngine({
   }, [runSingleTurn, onStop, isRunning, onStatusChange, clearScheduledTurn])
 
   const runContinuousLoop = useCallback((): void => {
-    console.log('runContinuousLoop called, current autonomous ref:', autonomousRef.current)
-
     autonomousRef.current = true
     onStatusChange('Starting continuous autonomous mode...')
-
-    // Start the autonomous loop immediately
-    console.log('Starting autonomous loop')
     clearScheduledTurn()
     runAutonomousLoop()
   }, [onStatusChange, runAutonomousLoop, clearScheduledTurn])
@@ -267,6 +335,8 @@ export function useAutonomousEngine({
     setCurrentAgent('Phys-Alpha')
     setCurrentCycle(1)
     setIsRunning(false)
+    setRunState('idle')
+    setRunError(null)
     autonomousRef.current = false
   }, [clearScheduledTurn])
 
@@ -276,6 +346,8 @@ export function useAutonomousEngine({
     currentCycle,
     runSingleTurn,
     runContinuousLoop,
-    reset
+    reset,
+    runState,
+    runError
   }
 }

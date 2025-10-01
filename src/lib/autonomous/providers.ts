@@ -1,6 +1,8 @@
 import { DEFAULT_PROVIDER_SETTINGS } from '@/types/agent'
 import type { AgentConfig, ProviderSettings, LLMProvider } from '@/types/agent'
 
+import { configureAgentClient, postChat } from '@/lib/api/agentClient'
+
 import type { ChatMessage } from './prompt-builders'
 import { sparkRuntime } from './spark-runtime'
 
@@ -10,10 +12,6 @@ interface ChatRequestBody {
   temperature: number
   stream: false
   max_tokens?: number
-}
-
-interface OllamaSegment {
-  text?: string
 }
 
 const OPENAI_REQUEST_TIMEOUT_MS = 30000
@@ -78,63 +76,6 @@ function extractChatContent(payload: unknown): string | null {
   return typeof content === 'string' ? content : null
 }
 
-function extractOllamaMessageCandidate(payload: unknown): string | unknown[] | null {
-  if (!isRecord(payload)) {
-    return null
-  }
-
-  const { message, response } = payload
-
-  if (typeof message === 'string') {
-    return message
-  }
-  if (isRecord(message) && typeof message.content === 'string') {
-    return message.content
-  }
-  if (Array.isArray(message)) {
-    return message
-  }
-
-  if (typeof response === 'string') {
-    return response
-  }
-  if (isRecord(response) && typeof response.content === 'string') {
-    return response.content
-  }
-  if (Array.isArray(response)) {
-    return response
-  }
-
-  return null
-}
-
-function flattenOllamaSegments(segments: unknown[]): string {
-  return segments
-    .map(segment => {
-      if (typeof segment === 'string') {
-        return segment
-      }
-      if (isRecord(segment) && typeof (segment as OllamaSegment).text === 'string') {
-        return (segment as OllamaSegment).text as string
-      }
-      return ''
-    })
-    .join('')
-}
-
-function extractOllamaError(payload: unknown, status: number): string {
-  if (!isRecord(payload)) {
-    return `HTTP ${status}`
-  }
-
-  const error = payload.error ?? payload.message
-  if (typeof error === 'string') {
-    return error
-  }
-
-  return `HTTP ${status}`
-}
-
 export async function callProviderLLM(
   agentConfig: AgentConfig,
   providerConfigs: ProviderSettings | undefined,
@@ -150,7 +91,7 @@ export async function callProviderLLM(
     case 'openrouter':
       return callOpenRouter(agentConfig, configs.openrouter, messages)
     case 'ollama':
-      return callOllama(agentConfig, configs.ollama, messages)
+      return callOllama(agentConfig, providerConfigs, messages)
     case 'spark':
     default:
       return callSpark(agentConfig, textPrompt)
@@ -313,49 +254,26 @@ async function callOpenRouter(
 
 async function callOllama(
   agentConfig: AgentConfig,
-  config: ProviderSettings['ollama'],
+  providerConfigs: ProviderSettings | undefined,
   messages: ChatMessage[]
 ): Promise<string> {
-  const fallback = DEFAULT_PROVIDER_SETTINGS.ollama?.baseUrl || 'http://localhost:11434'
-  const baseUrl = resolveBaseUrl(config?.baseUrl, fallback)
-  if (!baseUrl) {
-    throw new Error('Ollama provider selected but no base URL is configured')
+  configureAgentClient(providerConfigs ?? DEFAULT_PROVIDER_SETTINGS)
+
+  const options: Record<string, unknown> = {
+    temperature: agentConfig.temperature ?? 0.7
   }
 
-  const response = await fetch(`${baseUrl}/api/chat`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({
-      model: agentConfig.model || 'llama3.2',
-      messages,
-      stream: false,
-      options: {
-        temperature: agentConfig.temperature ?? 0.7,
-        ...(agentConfig.maxTokens && agentConfig.maxTokens > 0
-          ? { num_predict: agentConfig.maxTokens }
-          : {})
-      }
-    })
+  if (agentConfig.maxTokens && agentConfig.maxTokens > 0) {
+    options.num_predict = agentConfig.maxTokens
+  }
+
+  const { text } = await postChat({
+    provider: 'ollama',
+    model: agentConfig.model || 'llama3.2',
+    messages,
+    stream: false,
+    options
   })
 
-  const payload = await response.json().catch(() => {
-    throw new Error(`Failed to parse Ollama response (HTTP ${response.status})`)
-  })
-
-  if (!response.ok) {
-    throw new Error(extractOllamaError(payload, response.status))
-  }
-
-  const candidate = extractOllamaMessageCandidate(payload)
-  if (typeof candidate === 'string') {
-    return candidate
-  }
-
-  if (Array.isArray(candidate)) {
-    return flattenOllamaSegments(candidate)
-  }
-
-  throw new Error('Ollama response did not contain assistant content')
+  return text
 }

@@ -3,7 +3,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Progress } from '@/components/ui/progress'
 import { Separator } from '@/components/ui/separator'
-import { User, Pause, Play } from '@phosphor-icons/react'
+import { User, Pause, Play, CircleNotch } from '@phosphor-icons/react'
 import { AgentName } from '@/components/AutonomousEngine'
 
 // Agent configurations
@@ -109,7 +109,7 @@ export function AgentStatusPanel({
               >
                 {isRunning ? (
                   <>
-                    <Pause className="h-4 w-4 mr-1" />
+                    <CircleNotch className="h-4 w-4 mr-1 animate-spin" />
                     Running...
                   </>
                 ) : (
@@ -139,7 +139,7 @@ export function AgentStatusPanel({
               >
                 {isRunning ? (
                   <>
-                    <Pause className="h-4 w-4 mr-1" />
+                    <CircleNotch className="h-4 w-4 mr-1 animate-spin" />
                     Running...
                   </>
                 ) : (

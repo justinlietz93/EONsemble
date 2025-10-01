@@ -2,6 +2,30 @@
 
 ## Decision Log
 
+### 2025-09-29 — Restore agent runs and route remote providers from settings
+- **Context**: "Single Run" and "Autonomous Run" stayed idle with no transcript output and requests defaulted to localhost even
+  after configuring remote Ollama/Qdrant hosts. The UI never surfaced transport failures, so users saw an idle spinner with no
+  diagnostics.
+- **Options Considered**:
+  1. Introduce an `agentClient` module that reads provider URLs from Agent Settings/env, adds request timeouts + structured
+     errors, and update the run hooks/UI with explicit run states and error banners.
+  2. Hardcode remote base URLs via env overrides in `callProviderLLM` while leaving the existing UI untouched, deferring error
+     surfacing to the console.
+  3. Add a dev-only proxy (Vite) that forwards `/ollama`/`/qdrant` to remote hosts so the browser still targets localhost.
+  4. Layer a UI watchdog that retries the run when no derivations were produced, keeping the old networking code path.
+  5. Document the limitation and instruct users to keep runtimes on the same machine as the UI.
+- **Evaluation** (ranked by relevance & likelihood of success):
+  1. **Option 1** — Directly addresses the idle regression, surfaces actionable errors, and keeps settings as the single source
+     of truth. *Rank: 1*.
+  2. **Option 3** — Works for local dev but breaks in production/self-hosted setups without proxy support. *Rank: 2*.
+  3. **Option 2** — Quick but hides configuration drift and still leaves users without UI feedback. *Rank: 3*.
+  4. **Option 4** — Treats the symptom (missing derivation) but can loop indefinitely if the provider keeps failing. *Rank: 4*.
+  5. **Option 5** — No fix; contradicts the quality requirement. *Rank: 5*.
+- **Selected Approach**: Option 1 — build `agentClient`, plumb the URLs from settings, introduce run states, and display a
+  banner when the provider rejects the request.
+- **Self-Critique**: The client currently supports Ollama/Qdrant only; future providers (OpenAI/OpenRouter) still use the older
+  path. Follow-up work should consolidate providers and add streaming tests once additional runtimes are exercised.
+
 ### 2025-09-29 — Guard snapshot restores when persistence resets pre-empt count tracking
 - **Context**: Storage-event repros revealed a narrow race where the active tab flips to `goal-setup` before `previousKnowledgeCountRef` updates, so the knowledge snapshot guard sees a zero-length prior count and assumes the empty state is intentional. The user still observes "0 knowledge entries" after corpus uploads when persistence emits reset events, because the guard declines to restore.
 - **Options Considered**:
@@ -710,7 +734,7 @@
 
 
 ## Agent Execution Idle Regression (Single & Autonomous Runs)
-- [RETRYING] Capture reproducible traces for the "idle" single-run/autonomous hang.
+- [DONE] Capture reproducible traces for the "idle" single-run/autonomous hang.
   - Decision Log (2025-09-29):
     1. Instrument `useAutonomousEngine` with status callbacks and mock providers inside a Vitest harness to observe stuck state.
     2. Add logging middleware around agent API calls in the dev server to inspect outbound requests/responses.
@@ -720,8 +744,9 @@
     - Ranking: (1) Vitest harness (deterministic, automatable) > (2) server middleware (useful but server-heavy) > (3) sandbox (time-consuming) > (4) HAR trace (manual) > (5) ADR first (premature).
     - Selected Approach: Option 1 — craft a regression test around `useAutonomousEngine` to surface the idle loop.
     - Self-Critique: Test scaffolding may require extensive mocking; ensure complexity doesn't delay fix cadence.
-  - Status Notes (2025-09-29): Test plan drafted; mocks pending.
-- [STARTED] Diagnose why `runSingleTurn`/`runContinuousLoop` resolve without producing derivations.
+  - Status Notes (2025-09-29): Added `tests/components/agent.run.test.tsx` to deterministically reproduce the idle state with
+    mocked fetch responses and assert the run hooks fire. The test doubles as the trace harness for future regressions.
+- [DONE] Diagnose why `runSingleTurn`/`runContinuousLoop` resolve without producing derivations.
   - Decision Log (2025-09-29):
     1. Mock `generateAgentResponse` to resolve immediately and assert knowledge/derivation writes occur.
     2. Step through the real implementation with mock fetch responses to ensure provider configs propagate.
@@ -731,8 +756,9 @@
     - Ranking: (1) mock resolution (fast) > (2) step-through (accurate but slower) > (3) simplified generator (temporary) > (4) guard tests (supporting) > (5) manual logs.
     - Selected Approach: Option 1 — use deterministic mocks in tests to catch missing state updates.
     - Self-Critique: Must ensure mocks mirror actual API contract; will keep fallback tests referencing real logic where viable.
-  - Status Notes (2025-09-29): Investigative mocks under construction.
-- [NOT STARTED] Implement fix ensuring single/autonomous runs emit visible output and persist knowledge.
+  - Status Notes (2025-09-29): Refactored `useAutonomousEngine` with explicit run states, debug logging behind `localStorage` flag,
+    and consolidated error handling so diagnostic output is captured when the test harness injects failures.
+- [DONE] Implement fix ensuring single/autonomous runs emit visible output and persist knowledge.
   - Decision Log (2025-09-29):
     1. Resolve promise chain in `processAgentTurn` to guarantee `setDerivationHistory`/`setKnowledgeBase` updates before status reset.
     2. Add awaitable queue so concurrent invocations cannot race.
@@ -742,8 +768,10 @@
     - Ranking: (1) resolve promise chain (likely root cause) > (2) queue (heavy) > (4) retry/backoff (addresses network) > (3) loop split (structural) > (5) UI guard (symptom only).
     - Selected Approach: Option 1 — inspect asynchronous flow and ensure state writes occur before the run is marked idle.
     - Self-Critique: Need evidence before committing; ranking may change post-investigation.
-  - Status Notes (2025-09-29): Awaiting investigation outcomes.
-- [NOT STARTED] Backfill automated tests covering productive single and autonomous runs.
+  - Status Notes (2025-09-29): Implemented `agentClient` with timeouts + structured errors, updated `AgentCollaboration` to display
+    banners, and wired settings-derived URLs through the run pipeline. Runs now stream to the derivation panel with visible failure
+    messaging.
+- [DONE] Backfill automated tests covering productive single and autonomous runs.
   - Decision Log (2025-09-29):
     1. Extend `useAutonomousEngine` tests with deterministic mocks verifying knowledge/derivation updates per turn.
     2. Add RTL test around `AgentCollaboration` toggling single vs. autonomous triggers.
@@ -753,12 +781,13 @@
     - Ranking: (1) hook-level test > (2) RTL > (3) contract > (4) Playwright > (5) manual.
     - Selected Approach: Option 1 — start with hook-level coverage for determinism.
     - Self-Critique: Hook tests alone may miss UI wiring; will consider RTL once hook coverage passes.
-  - Status Notes (2025-09-29): Blocked pending fix implementation.
+  - Status Notes (2025-09-29): `tests/components/agent.run.test.tsx` validates both success and error flows against mocked `fetch`
+    calls, ensuring the UI renders output and error banners. Runbook updated with the new command for strict review.
 
 ---
 
 ## Remote AI Runtime Configuration
-- [STARTED] Wire Qdrant configuration into knowledge/vector consumers or gate via feature flag with graceful fallbacks.
+- [DONE] Wire Qdrant configuration into knowledge/vector consumers or gate via feature flag with graceful fallbacks.
   - Decision Log (2025-01-16):
     1. Thread Qdrant client configuration through existing persistence hooks (`useVoidMemoryBridge` / server bridge) with environment-variable overrides.
     2. Introduce an infrastructure layer adapter exposing repository interfaces that the UI can query via async boundary.
@@ -770,7 +799,7 @@
     - Self-Critique: Without a fully abstracted repository layer the threading approach may introduce coupling; mitigate by keeping the API boundaries clearly defined in follow-up commits.
   - Acceptance: Either functional integration or explicit no-op path with user-facing messaging when remote vector store unavailable.
   - Strict Review (2025-01-16): Checklist update keeps scope bounded (configuration threading + UX fallback) and documents residual coupling risk for follow-up mitigation.
-  - Status Notes (2025-09-29): Added environment-variable overrides (`VITE_OLLAMA_BASE_URL`, `VITE_QDRANT_BASE_URL`) that seed provider defaults without manual UI input, reducing friction when hosting runtimes on separate machines.
+  - Status Notes (2025-09-29): Introduced `agentClient` and updated `useAgentSettingsState` so Qdrant probes and Ollama model lists use the same client as runs, ensuring settings and environment overrides drive every consumer.
 - [NOT STARTED] Broaden automated coverage for Ollama/Qdrant settings persistence and validation logic beyond URL normalisation.
   - Acceptance: Component tests exercising form interactions and persistence writes.
 

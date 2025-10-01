@@ -4,6 +4,11 @@ import { toast } from 'sonner'
 import { useKV } from '@/hooks/useKV'
 import type { AgentConfig, LLMProvider, ProviderSettings } from '@/types/agent'
 import { DEFAULT_PROVIDER_SETTINGS } from '@/types/agent'
+import {
+  configureAgentClient,
+  listOllamaModels,
+  probeQdrant as probeQdrantClient
+} from '@/lib/api/agentClient'
 import type { AutonomousConfig } from '@/types/autonomous'
 import { DEFAULT_AUTONOMOUS_CONFIG } from '@/types/autonomous'
 import { fetchOpenAIModelIds, type FetchOpenAIModelOptions } from '@/lib/api/providers'
@@ -17,9 +22,6 @@ import {
   cloneAutonomousDefaults,
   normalizeBaseUrl
 } from './defaults'
-
-interface OllamaModel { name?: string | null }
-interface OllamaTagResponse { models?: OllamaModel[] }
 
 interface OpenRouterModel { id?: string | null; name?: string | null }
 interface OpenRouterResponse {
@@ -147,6 +149,10 @@ export function useAgentSettingsState({
     }
   }, [providerConfigs, setProviderConfigs])
 
+  useEffect(() => {
+    configureAgentClient(providerConfigs ?? cloneProviderDefaults())
+  }, [providerConfigs])
+
   const ollamaBaseUrl = useMemo(() => {
     const fallback = DEFAULT_PROVIDER_SETTINGS.ollama.baseUrl ?? 'http://localhost:11434'
     return normalizeBaseUrl(providerConfigs?.ollama?.baseUrl, fallback)
@@ -242,24 +248,12 @@ export function useAgentSettingsState({
   }, [fetchOpenAIModels])
 
   const fetchOllamaModels = useCallback(async () => {
-    const baseUrl = ollamaBaseUrl
-    if (!baseUrl) {
-      setOllamaError('Ollama base URL is not configured')
-      return
-    }
-
     setOllamaLoading(true)
     setOllamaError(null)
 
     try {
-      const response = await fetch(`${baseUrl}/api/tags`)
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status} when requesting models`)
-      }
-      const data = (await response.json()) as OllamaTagResponse
-      const models = (data.models ?? [])
-        .map(model => model.name?.trim())
-        .filter((name): name is string => Boolean(name))
+      configureAgentClient(providerConfigs ?? cloneProviderDefaults())
+      const { models } = await listOllamaModels()
       setOllamaModels(models)
     } catch (error) {
       console.error('Failed to fetch Ollama models', error)
@@ -267,7 +261,7 @@ export function useAgentSettingsState({
     } finally {
       setOllamaLoading(false)
     }
-  }, [ollamaBaseUrl])
+  }, [providerConfigs])
 
   const fetchOpenRouterModels = useCallback(async () => {
     const apiKey = providerConfigs?.openrouter?.apiKey
@@ -308,34 +302,14 @@ export function useAgentSettingsState({
   }, [defaultReferer, openRouterBaseUrl, providerConfigs?.openrouter])
 
   const probeQdrant = useCallback(async () => {
-    if (!qdrantBaseUrl) {
-      setQdrantStatus('error')
-      setQdrantMessage('Qdrant base URL is not configured')
-      return
-    }
-
     setQdrantLoading(true)
     setQdrantMessage(null)
 
     try {
-      const response = await fetch(`${qdrantBaseUrl}/collections`, {
-        headers: providerConfigs?.qdrant?.apiKey
-          ? { 'api-key': providerConfigs.qdrant.apiKey }
-          : undefined
-      })
-
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`)
-      }
-
-      setQdrantStatus('ready')
-      const payload = (await response.json()) as { collections?: unknown[] }
-      const count = Array.isArray(payload.collections) ? payload.collections.length : undefined
-      setQdrantMessage(
-        count !== undefined
-          ? `Detected ${count} collections at ${qdrantBaseUrl}`
-          : `Connected to ${qdrantBaseUrl}`
-      )
+      configureAgentClient(providerConfigs ?? cloneProviderDefaults())
+      const result = await probeQdrantClient()
+      setQdrantStatus(result.status)
+      setQdrantMessage(result.message)
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to reach Qdrant'
       console.error('Failed to probe Qdrant', error)
@@ -344,7 +318,7 @@ export function useAgentSettingsState({
     } finally {
       setQdrantLoading(false)
     }
-  }, [providerConfigs?.qdrant?.apiKey, qdrantBaseUrl])
+  }, [providerConfigs])
 
   useEffect(() => {
     if (providerConfigs?.ollama?.baseUrl) {
