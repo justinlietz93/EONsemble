@@ -455,7 +455,7 @@
 ---
 
 ## Knowledge Base Persistence Regression
-- [RETRYING] Guarantee knowledge entries survive tab switches even when persistence hydration returns `undefined`/`null` or
+- [DONE] Guarantee knowledge entries survive tab switches even when persistence hydration returns `undefined`/`null` or
   races ahead of local writes.
   - Decision Log (2025-09-29): Adopt the `localStorage` mirror approach captured in "Knowledge Base Tab Loss Reopening".
   - Acceptance Criteria:
@@ -497,7 +497,8 @@
     - Self-Critique: Adapter pattern adds indirection; must keep API minimal (`read`, `write`, `remove`) to avoid complexity.
   - Status Notes (2025-09-29): Reopened after observing that server hydration overwrites unsynced mirror data when the backend misses recent uploads. Metadata guard + retry loop pending. Tests need to reflect the stale-server scenario. Strict Judge review deferred until the metadata patch lands and agentic entry points are retested.
   - Status Notes (2025-09-29 — PM): Implemented the sync-metadata guard, automatic resubmission of mirror payloads, and adapter helpers for metadata storage. Added targeted regressions (`tests/hooks/useKV.test.tsx`, `tests/components/app.knowledge-sync.test.tsx`) plus reran the legacy persistence suite and screen smoke tests. Strict Judge Review: Verified agentic operations via `npx vitest run tests/components/screens.test.tsx` and ensured metadata-protected hydrations leave knowledge intact while reissuing persistence PUTs.
-  - Status Notes (2025-09-29 — Late PM Reopen): Live manual repro still empties knowledge after tab switches. Status set to `[RETRYING]` until the new regression harness fails pre-fix, passes post-fix, and diagnostics confirm no silent clears occur during navigation.
+  - Status Notes (2025-09-29 — Late PM Reopen): Live manual repro still empties knowledge after tab switches. Status was set to `[RETRYING]` until the new regression harness failed pre-fix, passed post-fix, and diagnostics confirmed no silent clears occur during navigation.
+  - Status Notes (2025-09-30 — Offline Mirror Verification): Added `retains knowledge entries when the persistence API is offline during hydration` to `tests/components/app.knowledge-persistence.test.tsx`, forcing `fetch` to reject for `/api/state` calls. The test confirms the local mirror seeds state before hydration and that knowledge entries remain visible after tab switches without a persistence server. Strict Judge Review: `npm run test -- --run tests/components/app.knowledge-persistence.test.tsx -t "retains knowledge entries when the persistence API is offline during hydration"`.
   - Status Notes (2025-09-29 — Diagnostics): `useSessionDiagnostics` now emits console traces for knowledge count deltas and sample churn, guarding against silent resets. Hook tests cover increase/decrease/sample-change cases, giving observers richer breadcrumbs during manual repro.
   - Status Notes (2025-09-29 — Regression Harness): Added `retains knowledge after navigating across collaboration and settings tabs during deferred uploads` to `tests/components/app.knowledge-persistence.test.tsx`, covering multi-tab unmount/mount cycles with delayed FileReader completion. The test currently passes, indicating the live failure likely stems from an environment-specific condition not yet modelled.
   - Status Notes (2025-09-29 — Snapshot Guard): Implemented the in-app snapshot restoration hook with contextual diagnostics. Hook-level tests prove drop-to-zero states auto-heal while allowing explicit clears when flagged. Pending live validation before downgrading from `[RETRYING]`.

@@ -229,6 +229,59 @@ describe('Knowledge base persistence behaviour', () => {
     expect(cardTitles.length).toBeGreaterThan(0)
   })
 
+  it('retains knowledge entries when the persistence API is offline during hydration', async () => {
+    sessionStorage.setItem('eon.activeTab', 'knowledge')
+
+    const defaultFetch = buildFetchMock()
+    const offlineFetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input.toString()
+      if (url.includes('/api/state/')) {
+        return Promise.reject(new TypeError('Network request failed'))
+      }
+      return defaultFetch(input, init)
+    })
+
+    vi.stubGlobal('fetch', offlineFetch)
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    try {
+      render(<App />)
+
+      const knowledgeHeading = await screen.findByRole('heading', { name: /knowledge base/i })
+      const knowledgeView = knowledgeHeading.closest('div')?.parentElement?.parentElement ?? document.body
+
+      const addTestDataButton = await within(knowledgeView).findByRole('button', { name: /add test data/i })
+      fireEvent.click(addTestDataButton)
+
+      expect(await within(knowledgeView).findByText(/sample physics knowledge/i)).toBeInTheDocument()
+
+      const goalSetupTab = screen.getByRole('tab', { name: /goal setup/i })
+      fireEvent.pointerDown(goalSetupTab)
+      fireEvent.click(goalSetupTab)
+
+      const knowledgeTab = screen.getByRole('tab', { name: /knowledge base/i })
+      fireEvent.pointerDown(knowledgeTab)
+      fireEvent.click(knowledgeTab)
+
+      await waitFor(() => {
+        const stateCalls = offlineFetch.mock.calls.filter(([request]) =>
+          request.toString().includes('/api/state/knowledge-base')
+        )
+        expect(stateCalls.length).toBeGreaterThan(0)
+      })
+
+      const reloadedHeading = await screen.findByRole('heading', { name: /knowledge base/i })
+      const reloadedContainer =
+        reloadedHeading.closest('div')?.parentElement?.parentElement ?? document.body
+      const entriesAfterReturn = within(reloadedContainer).queryAllByText(/sample physics knowledge/i)
+
+      expect(entriesAfterReturn.length).toBeGreaterThan(0)
+    } finally {
+      warnSpy.mockRestore()
+    }
+  })
+
   it('currently loses knowledge entries when the persistence API hydrates null values', async () => {
     sessionStorage.setItem('eon.activeTab', 'knowledge')
 
