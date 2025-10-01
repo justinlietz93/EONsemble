@@ -2,6 +2,60 @@
 
 ## Decision Log
 
+### 2025-09-30 — Restore knowledge after regressive hydration when mirrors vanish
+- **Context**: Real-world repros showed that when the browser mirror is cleared (for example via storage eviction or manual
+  resets) the persistence API can respond with an empty knowledge payload and bypass the shrinkage guard because no local mirror
+  is available. The knowledge counter still dropped to zero after tab switches even though we retained the prior snapshot in
+  memory. We needed a deterministic fallback that refuses regressive hydrations, restores the last-known-good snapshot, and
+  resubmits it to persistence so the backend is healed automatically.
+- **Options Considered**:
+  1. Track a knowledge snapshot within `App` and veto hydrations that shrink or drop known IDs, restoring the snapshot and
+     resyncing it to the server.
+  2. Extend `useKV` metadata with payload digests so the hook can reject any shrinkage even without consumer context.
+  3. Force a full persistence reload (PUT followed by GET) whenever hydration disagrees with the snapshot, accepting the second
+     response only.
+  4. Prompt the user whenever hydration would remove entries, letting them decide whether to keep the snapshot or accept the
+     backend payload.
+  5. Document the failure mode and require manual refreshes instead of adding automated recovery.
+- **Evaluation** (ranked by relevance & likelihood of success):
+  1. **Option 1** — Minimal scope, keeps domain-specific checks near the knowledge UI, easy to test. *Rank: 1*.
+  2. **Option 2** — Broad coverage but heavier metadata churn and risky for large payloads. *Rank: 2*.
+  3. **Option 3** — Doubles network traffic and still risks getting the same regressive payload twice. *Rank: 3*.
+  4. **Option 4** — Transparent but interrupts UX with high-friction prompts. *Rank: 4*.
+  5. **Option 5** — No automation, leaves users vulnerable to repeat regressions. *Rank: 5*.
+- **Selected Approach**: Option 1 — maintain a snapshot of knowledge IDs/counts inside `App`, veto regressive hydrations, and
+  immediately restore + resubmit the snapshot so both UI state and persistence converge without user intervention.
+- **Self-Critique**: Snapshot cloning adds memory overhead and assumes knowledge entries stay reasonably small. Documenting the
+  behaviour and keeping tests around resync flows mitigates the risk of silent performance regressions.
+
+### 2025-09-30 — Replay rejected hydrations back to persistence
+- **Context**: Field repro shows that even after vetoing regressive hydrations, the backend store occasionally remains empty,
+  so subsequent navigations still hydrate `null`/`[]` payloads and wipe the mirror after a reload. The app-level guard restores
+  UI state, but without re-persisting the snapshot we remain vulnerable to the backend never catching up. We need an automatic
+  replay so server state converges immediately after a rejection, plus coverage that asserts the replay occurs.
+- **Options Considered**:
+  1. Teach `useKV` to treat `null`/empty hydrations as stale whenever a non-empty local mirror exists, immediately resubmitting
+     the local payload and keeping the in-memory state untouched.
+  2. Move the replay logic into `App.tsx`, where the snapshot already lives, issuing a `savePersistedValue` call whenever the
+     hydration predicate fires.
+  3. Introduce a persistence reconciliation worker that periodically compares local mirrors against server responses and
+     replays differences in the background.
+  4. Force a full delete + PUT cycle (delete server state, then re-upload) whenever a regressive payload arrives, guaranteeing a
+     clean slate.
+  5. Surface a blocking modal prompting the user to confirm whether to re-upload the snapshot whenever a shrinkage is detected.
+- **Evaluation** (ranked by relevance & likelihood of success):
+  1. **Option 1** — Localized to the persistence hook, fully automated, easily testable with spies. *Rank: 1*.
+  2. **Option 2** — Keeps hook smaller but duplicates persistence wiring and risks diverging behaviours across consumers. *Rank:
+     2*.
+  3. **Option 3** — Robust but overkill for the immediate regression and adds idle resource usage. *Rank: 3*.
+  4. **Option 4** — Heavy-handed; deleting state risks data loss during concurrent sessions. *Rank: 4*.
+  5. **Option 5** — Transparent but slows UX and violates the automation goal. *Rank: 5*.
+- **Selected Approach**: Option 1 — embed replay logic inside `useKV` so any consumer rejecting hydrations automatically pushes
+  the preserved local payload back to persistence without extra wiring.
+- **Self-Critique**: Centralising replay in the hook increases responsibility for all keys; must ensure keys that legitimately
+  accept empty payloads (e.g., defaults) do not thrash the server. Will guard by only replaying when the local mirror is
+  non-empty and the default value is not `null`.
+
 ### 2025-09-29 — Knowledge Mirror Guard Still Loses Entries After Tab Switch
 - **Context**: The live app continues to drop the knowledge counter to zero immediately after switching away from and back to
   the Knowledge tab, even after implementing the metadata-based mirror guard. This indicates either the guard is not covering
@@ -212,7 +266,8 @@
     6. ✅ Thread structured `knowledge-base` state change logs into `useSessionDiagnostics` to capture future regressions with contextual evidence. *(2025-09-29: Added knowledge delta/sample logging with expanded hook tests.)*
     7. [DONE] Introduce shrinkage-aware hydration guards so empty backend payloads cannot overwrite richer mirror data when metadata claims the writes succeeded. *(2025-09-29 Evening: Added `shouldAcceptHydration` predicate support to `useKV`, wired knowledge-base guard in `App.tsx`, and extended hook regressions with a shrinkage veto case.)*
   - Strict Judge Checklist: Confirm no additional regressions in agentic operations (`AutonomousEngine` single + continuous run)
-    after the persistence changes.
+    after the persistence changes. *(2025-09-30: Verified by rerunning `npm run test -- --run tests/components/screens.test.tsx`
+    following the replay updates.)*
   - Implementation Options Review (2025-09-29):
     1. Inject a pluggable storage adapter into `useKV`, defaulting to `localStorage`, so tests can supply in-memory mocks.
     2. Hard-code a `localStorage` mirror inside the hook with feature detection and graceful failure logging.
@@ -338,6 +393,15 @@
   - Status Notes (2025-09-29, later): Instrumented `CorpusUpload` with mount/unmount diagnostics and guarded file-state updates so we can detect uploads finishing after the component unmounts. Vitest output now reports when knowledge writes happen post-unmount, confirming the timing window exists and giving us breadcrumbs for the root cause analysis.
   - Status Notes (2025-09-29 — Evening): Manual repro shows backend hydrations occasionally return empty arrays immediately after a successful upload. Pending shrinkage guard (`useKV` predicate) is expected to keep the richer mirror data while pushing a restorative write back to the server. Strict Judge check will rerun agentic operation tests once the guard lands.
   - Status Notes (2025-09-29 — Late Evening): Implemented the shrinkage guard and confirmed `useKV` rejects smaller server payloads while replaying the mirror state. Vitest suites (`tests/hooks/useKV.test.tsx`, `tests/components/app.knowledge-persistence.test.tsx`, `tests/components/screens.test.tsx`) all pass, covering both the guard and agentic operations.
+- [DONE] Replay rejected hydrations to persistence so the backend converges without manual intervention.
+  - Acceptance: `useKV` automatically resubmits the latest local payload when persistence returns `null`/`[]` after a richer local write, the UI never flickers, and integration tests assert a second `savePersistedValue` call occurs in response to the rejection.
+  - Plan (2025-09-30):
+    1. Update `useKV` to treat regressive or empty hydrations as cache misses whenever a non-empty local mirror exists, invoking a replay even if no sync is currently pending.
+    2. Extend `tests/hooks/useKV.test.tsx` with spies proving the replay fires when hydration yields `null` after prior writes.
+    3. Add an RTL regression in `tests/components/app.knowledge-persistence.test.tsx` that asserts the mocked persistence layer receives the recovery PUT once the guard vetoes a shrinkage payload.
+  - Strict Judge Note: Re-run the agentic operations smoke (`tests/components/screens.test.tsx`) after the hook change to ensure autonomous execution remains stable.
+  - Status Notes (2025-09-30): Added a replay branch in `useKV` that reuses preserved mirrors whenever persistence returns `null`/`[]`, issued warnings for the recovery, and ensured metadata-aware retries only fire when prior syncs occurred. Hook tests now capture the extra persistence PUT after remount, and the RTL suite confirms the knowledge snapshot is resent following a rejected hydration.
+  - Strict Judge Review (2025-09-30): Executed `npm run test -- --run tests/components/screens.test.tsx` to confirm agentic operations remain stable after the persistence replay update.
 - [NOT STARTED] Patch the root cause once identified, ensuring no knowledge loss across manual uploads, agent writes, and goal resets.
   - Acceptance: Live manual QA documented plus passing automated regressions covering the new timing scenario.
   - Follow-up: Update documentation/runbooks once the fix lands.

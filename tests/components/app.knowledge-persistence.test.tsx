@@ -392,6 +392,185 @@ describe('Knowledge base persistence behaviour', () => {
     expect(entriesAfterSwitch.length).toBeGreaterThan(0)
   })
 
+  it('restores knowledge after regressive hydration when local mirrors are unavailable', async () => {
+    sessionStorage.setItem('eon.activeTab', 'knowledge')
+
+    const persistedStore = new Map<string, unknown>()
+    let initialHydrationHandled = false
+    let resolveInitialHydration: ((response: Response) => void) | null = null
+    const initialHydrationPromise = new Promise<Response>(resolve => {
+      resolveInitialHydration = response => {
+        resolve(response)
+        resolveInitialHydration = null
+      }
+    })
+
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input.toString()
+      const method = init?.method ?? 'GET'
+
+      if (url.includes('/api/state/knowledge-base')) {
+        if (method === 'PUT') {
+          const body = typeof init?.body === 'string' ? init.body : ''
+          let value: unknown = null
+          try {
+            value = JSON.parse(body || '{}').value ?? null
+          } catch {
+            value = null
+          }
+          persistedStore.set('knowledge-base', value)
+          return new Response(JSON.stringify({ value }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' }
+          })
+        }
+
+        if (!initialHydrationHandled) {
+          initialHydrationHandled = true
+          return initialHydrationPromise
+        }
+
+        const stored = persistedStore.get('knowledge-base') ?? null
+        return new Response(JSON.stringify({ value: stored }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' }
+        })
+      }
+
+      return buildFetchMock()(input, init)
+    })
+
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<App />)
+
+    const knowledgeHeading = await screen.findByRole('heading', { name: /knowledge base/i })
+    const knowledgeView = knowledgeHeading.closest('div')?.parentElement?.parentElement ?? document.body
+
+    const addTestDataButton = await within(knowledgeView).findByRole('button', { name: /add test data/i })
+    fireEvent.click(addTestDataButton)
+
+    expect(await within(knowledgeView).findByText(/sample physics knowledge/i)).toBeInTheDocument()
+
+    await waitFor(() => {
+      const putCalls = fetchMock.mock.calls.filter(([, init]) => (init?.method ?? 'GET') === 'PUT')
+      expect(putCalls.length).toBeGreaterThan(0)
+    })
+
+    window.localStorage.removeItem('eon.kv.knowledge-base')
+    window.localStorage.removeItem('eon.kv.meta.knowledge-base')
+    clearKVStore()
+
+    resolveInitialHydration?.(
+      new Response(JSON.stringify({ value: [] }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' }
+      })
+    )
+
+    await waitFor(() => {
+      const entries = within(knowledgeView).queryAllByText(/sample physics knowledge/i)
+      expect(entries.length).toBeGreaterThan(0)
+    })
+
+    const knowledgeBadge = await screen.findByText(/knowledge entries/i)
+    expect(knowledgeBadge).toHaveTextContent('1')
+  })
+
+  it('replays the knowledge snapshot to persistence after rejecting a regressive hydration', async () => {
+    sessionStorage.setItem('eon.activeTab', 'knowledge')
+
+    const knowledgePutBodies: unknown[] = []
+
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input.toString()
+      const method = init?.method ?? 'GET'
+
+      if (url.includes('/api/state/knowledge-base')) {
+        if (method === 'PUT') {
+          const body = typeof init?.body === 'string' ? init.body : ''
+          let value: unknown = null
+          try {
+            value = JSON.parse(body || '{}').value ?? null
+          } catch {
+            value = null
+          }
+          knowledgePutBodies.push(value)
+          return new Response(JSON.stringify({ value }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' }
+          })
+        }
+
+        return new Response(JSON.stringify({ value: [] }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' }
+        })
+      }
+
+      if (url.includes('/api/state/')) {
+        if (method === 'PUT') {
+          const body = typeof init?.body === 'string' ? init.body : ''
+          let value: unknown = null
+          try {
+            value = JSON.parse(body || '{}').value ?? null
+          } catch {
+            value = null
+          }
+          return new Response(JSON.stringify({ value }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' }
+          })
+        }
+
+        return new Response(JSON.stringify({ value: null }), {
+          status: 404,
+          headers: { 'Content-Type': 'application/json' }
+        })
+      }
+
+      return buildFetchMock()(input, init)
+    })
+
+    vi.stubGlobal('fetch', fetchMock)
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    const { unmount } = render(<App />)
+
+    const knowledgeHeading = await screen.findByRole('heading', { name: /knowledge base/i })
+    const knowledgeView = knowledgeHeading.closest('div')?.parentElement?.parentElement ?? document.body
+    const addTestDataButton = await within(knowledgeView).findByRole('button', { name: /add test data/i })
+    fireEvent.click(addTestDataButton)
+
+    expect(await within(knowledgeView).findByText(/sample physics knowledge/i)).toBeInTheDocument()
+
+    await waitFor(() => {
+      expect(knowledgePutBodies.length).toBeGreaterThanOrEqual(1)
+    })
+
+    unmount()
+
+    render(<App />)
+
+    const reloadedHeading = await screen.findByRole('heading', { name: /knowledge base/i })
+    const reloadedView = reloadedHeading.closest('div')?.parentElement?.parentElement ?? document.body
+
+    await waitFor(() => {
+      expect(within(reloadedView).getAllByText(/sample physics knowledge/i).length).toBeGreaterThan(0)
+    })
+
+    await waitFor(() => {
+      expect(knowledgePutBodies.length).toBeGreaterThanOrEqual(2)
+    })
+
+    expect(knowledgePutBodies[knowledgePutBodies.length - 1]).toEqual(
+      knowledgePutBodies[0]
+    )
+
+    warnSpy.mockRestore()
+  })
+
   it('retains corpus uploads even when file processing completes after leaving the tab', async () => {
     sessionStorage.setItem('eon.activeTab', 'knowledge')
 

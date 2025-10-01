@@ -180,6 +180,69 @@ describe('useKV', () => {
     })
   })
 
+  it('replays the local mirror when a later hydration returns null after a successful sync', async () => {
+    type Entry = { id: string }
+
+    const storageState: Record<string, Entry[]> = {}
+    const metadataState: Record<string, { lastUpdatedAt: number; lastSyncedAt: number | null }> = {}
+
+    setKVStorageAdapter({
+      read: (key) => storageState[key] as Entry[] | undefined,
+      write: (key, value) => {
+        storageState[key] = value as Entry[]
+      },
+      remove: (key) => {
+        delete storageState[key]
+      },
+      readMetadata: (key) => metadataState[key],
+      writeMetadata: (key, metadata) => {
+        metadataState[key] = metadata
+      },
+      removeMetadata: (key) => {
+        delete metadataState[key]
+      }
+    })
+
+    fetchPersistedValue.mockResolvedValueOnce(undefined)
+    savePersistedValue.mockResolvedValue()
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    const { result, unmount } = renderHook(() => useKV<Entry[]>('knowledge-base', () => []))
+
+    act(() => {
+      result.current[1]([{ id: 'entry-1' }])
+    })
+
+    await waitFor(() => {
+      expect(savePersistedValue).toHaveBeenCalledWith('knowledge-base', [
+        { id: 'entry-1' }
+      ])
+    })
+
+    const callsBeforeRemount = savePersistedValue.mock.calls.length
+
+    unmount()
+
+    fetchPersistedValue.mockResolvedValueOnce(null)
+
+    const { result: remounted } = renderHook(() => useKV<Entry[]>('knowledge-base', () => []))
+
+    await waitFor(() => {
+      expect(remounted.current[0]).toEqual([{ id: 'entry-1' }])
+    })
+
+    await waitFor(() => {
+      expect(savePersistedValue.mock.calls.length).toBeGreaterThan(callsBeforeRemount)
+    })
+
+    expect(savePersistedValue).toHaveBeenLastCalledWith('knowledge-base', [
+      { id: 'entry-1' }
+    ])
+
+    warnSpy.mockRestore()
+  })
+
   it('rejects shrinkage-only hydration when predicate vetoes the incoming payload', async () => {
     type Entry = { id: string }
 

@@ -302,15 +302,31 @@ export function useKV<T>(
       const pendingSync = hasPendingSyncRef.current
 
       if (stored === undefined || (stored === null && fallback !== null)) {
-        const mirrored = readFromAdapter<T>(key)
-        if (mirrored !== undefined) {
-          memoryStore.set(key, mirrored)
+        const localOrMirror = memoryStore.has(key)
+          ? (memoryStore.get(key) as T)
+          : readFromAdapter<T>(key)
+
+        if (localOrMirror !== undefined) {
+          memoryStore.set(key, localOrMirror)
           if (!cancelled) {
-            setValue(mirrored)
+            setValue(localOrMirror)
           }
-          if (pendingSync) {
-            attemptResync(mirrored)
+
+          if (stored === null) {
+            console.warn(
+              `[useKV] Received null for key "${key}"; replaying preserved local state back to persistence.`
+            )
           }
+
+          const previouslySynced = metadataRef.current.lastSyncedAt !== null
+          if (
+            hasPendingSyncRef.current ||
+            stored === null ||
+            (stored === undefined && previouslySynced)
+          ) {
+            attemptResync(localOrMirror)
+          }
+
           return
         }
 
@@ -331,7 +347,7 @@ export function useKV<T>(
         } else if (!cancelled) {
           const existing = memoryStore.get(key) as T
           setValue(existing)
-          if (pendingSync) {
+          if (hasPendingSyncRef.current || stored === null) {
             attemptResync(existing)
           }
         }
