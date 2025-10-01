@@ -12,6 +12,15 @@ vi.mock('@/lib/api/persistence', () => persistenceMocks)
 
 const { fetchPersistedValue, savePersistedValue } = persistenceMocks
 
+const dispatchStorageEvent = (key: string, newValue: string | null) => {
+  const event = new StorageEvent('storage', { key, newValue })
+  Object.defineProperty(event, 'storageArea', {
+    value: window.localStorage,
+    configurable: true
+  })
+  window.dispatchEvent(event)
+}
+
 describe('useKV', () => {
   beforeEach(() => {
     clearKVStore()
@@ -132,6 +141,75 @@ describe('useKV', () => {
       { id: 'mirror-entry' },
       { id: 'added-entry' }
     ])
+  })
+
+  it('syncs updates from other tabs without issuing duplicate persistence writes', async () => {
+    type Entry = { id: string }
+
+    fetchPersistedValue.mockResolvedValueOnce(undefined)
+    savePersistedValue.mockResolvedValue()
+
+    const { result } = renderHook(() => useKV<Entry[]>('shared-knowledge', () => []))
+
+    act(() => {
+      result.current[1]([{ id: 'local-entry' }])
+    })
+
+    await waitFor(() => {
+      expect(result.current[0]).toEqual([{ id: 'local-entry' }])
+    })
+
+    savePersistedValue.mockClear()
+
+    const externalEntries: Entry[] = [{ id: 'external-entry' }]
+    window.localStorage.setItem('eon.kv.shared-knowledge', JSON.stringify(externalEntries))
+    window.localStorage.setItem(
+      'eon.kv.meta.shared-knowledge',
+      JSON.stringify({ lastUpdatedAt: Date.now(), lastSyncedAt: Date.now() })
+    )
+
+    await act(async () => {
+      dispatchStorageEvent('eon.kv.shared-knowledge', JSON.stringify(externalEntries))
+      dispatchStorageEvent(
+        'eon.kv.meta.shared-knowledge',
+        JSON.stringify({ lastUpdatedAt: Date.now(), lastSyncedAt: Date.now() })
+      )
+    })
+
+    await waitFor(() => {
+      expect(result.current[0]).toEqual(externalEntries)
+    })
+
+    expect(savePersistedValue).not.toHaveBeenCalled()
+  })
+
+  it('honours the hydration predicate when applying storage events', async () => {
+    type Entry = { id: string }
+
+    fetchPersistedValue.mockResolvedValueOnce(undefined)
+    savePersistedValue.mockResolvedValue()
+
+    const { result } = renderHook(() =>
+      useKV<Entry[]>(
+        'predicate-knowledge',
+        () => [{ id: 'initial-entry' }],
+        {
+          shouldAcceptHydration: (incoming) => Array.isArray(incoming) && incoming.length >= 1
+        }
+      )
+    )
+
+    await waitFor(() => {
+      expect(result.current[0]).toEqual([{ id: 'initial-entry' }])
+    })
+
+    window.localStorage.setItem('eon.kv.predicate-knowledge', JSON.stringify([]))
+
+    await act(async () => {
+      dispatchStorageEvent('eon.kv.predicate-knowledge', JSON.stringify([]))
+    })
+
+    expect(result.current[0]).toEqual([{ id: 'initial-entry' }])
   })
 
   it('keeps mirrored values when pending sync metadata exists and hydration returns an empty array', async () => {

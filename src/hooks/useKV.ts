@@ -2,20 +2,27 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { fetchPersistedValue, savePersistedValue } from '@/lib/api/persistence'
 
+import {
+  DEFAULT_METADATA,
+  METADATA_PREFIX,
+  STORAGE_PREFIX,
+  readFromAdapter,
+  readMetadataFromAdapter,
+  removeFromAdapter,
+  removeMetadataFromAdapter,
+  writeMetadataToAdapter,
+  writeToAdapter,
+  type StorageMetadata
+} from './useKV.storage'
+
+export { setKVStorageAdapter } from './useKV.storage'
+
 type InitialValue<T> = T | (() => T)
 type Updater<T> = T | ((previous: T) => T)
 
 export type KVUpdater<T> = Updater<T>
 
 const memoryStore = new Map<string, unknown>()
-
-const STORAGE_PREFIX = 'eon.kv.'
-const METADATA_PREFIX = `${STORAGE_PREFIX}meta.`
-
-type StorageMetadata = {
-  lastUpdatedAt: number
-  lastSyncedAt: number | null
-}
 
 export type UseKVHydrationContext<T> = {
   key: string
@@ -26,154 +33,6 @@ export type UseKVHydrationContext<T> = {
 
 export type UseKVOptions<T> = {
   shouldAcceptHydration?: (incoming: T, context: UseKVHydrationContext<T>) => boolean
-}
-
-type StorageAdapter = {
-  read<T>(key: string): T | undefined
-  write<T>(key: string, value: T): void
-  remove(key: string): void
-  readMetadata(key: string): StorageMetadata | undefined
-  writeMetadata(key: string, metadata: StorageMetadata): void
-  removeMetadata(key: string): void
-}
-
-const buildDefaultAdapter = (): StorageAdapter => {
-  if (typeof window === 'undefined') {
-    return {
-      read: () => undefined,
-      write: () => {},
-      remove: () => {},
-      readMetadata: () => undefined,
-      writeMetadata: () => {},
-      removeMetadata: () => {}
-    }
-  }
-
-  return {
-    read: <T,>(key: string): T | undefined => {
-      try {
-        const raw = window.localStorage?.getItem(`${STORAGE_PREFIX}${key}`)
-        if (raw === null || raw === undefined) {
-          return undefined
-        }
-
-        return JSON.parse(raw) as T
-      } catch (error) {
-        console.warn(`[useKV] Failed to parse browser storage for key "${key}"`, error)
-        return undefined
-      }
-    },
-    write: <T,>(key: string, value: T): void => {
-      try {
-        window.localStorage?.setItem(`${STORAGE_PREFIX}${key}`, JSON.stringify(value))
-      } catch (error) {
-        console.warn(`[useKV] Failed to persist browser storage value for key "${key}"`, error)
-      }
-    },
-    remove: (key: string): void => {
-      try {
-        window.localStorage?.removeItem(`${STORAGE_PREFIX}${key}`)
-      } catch (error) {
-        console.warn(`[useKV] Failed to remove browser storage value for key "${key}"`, error)
-      }
-    },
-    readMetadata: (key: string): StorageMetadata | undefined => {
-      try {
-        const raw = window.localStorage?.getItem(`${METADATA_PREFIX}${key}`)
-        if (!raw) {
-          return undefined
-        }
-
-        const parsed = JSON.parse(raw) as Partial<StorageMetadata>
-        if (typeof parsed?.lastUpdatedAt !== 'number') {
-          return undefined
-        }
-
-        const lastSyncedAt =
-          typeof parsed.lastSyncedAt === 'number' ? parsed.lastSyncedAt : null
-
-        return {
-          lastUpdatedAt: parsed.lastUpdatedAt,
-          lastSyncedAt
-        }
-      } catch (error) {
-        console.warn(`[useKV] Failed to parse browser storage metadata for key "${key}"`, error)
-        return undefined
-      }
-    },
-    writeMetadata: (key: string, metadata: StorageMetadata): void => {
-      try {
-        window.localStorage?.setItem(`${METADATA_PREFIX}${key}`, JSON.stringify(metadata))
-      } catch (error) {
-        console.warn(`[useKV] Failed to persist browser storage metadata for key "${key}"`, error)
-      }
-    },
-    removeMetadata: (key: string): void => {
-      try {
-        window.localStorage?.removeItem(`${METADATA_PREFIX}${key}`)
-      } catch (error) {
-        console.warn(`[useKV] Failed to remove browser storage metadata for key "${key}"`, error)
-      }
-    }
-  }
-}
-
-let storageAdapter: StorageAdapter = buildDefaultAdapter()
-
-const readFromAdapter = <T,>(key: string): T | undefined => {
-  try {
-    return storageAdapter.read<T>(key)
-  } catch (error) {
-    console.warn(`[useKV] Storage adapter read failed for key "${key}"`, error)
-    return undefined
-  }
-}
-
-const writeToAdapter = <T,>(key: string, value: T): void => {
-  try {
-    storageAdapter.write<T>(key, value)
-  } catch (error) {
-    console.warn(`[useKV] Storage adapter write failed for key "${key}"`, error)
-  }
-}
-
-const removeFromAdapter = (key: string): void => {
-  try {
-    storageAdapter.remove(key)
-  } catch (error) {
-    console.warn(`[useKV] Storage adapter remove failed for key "${key}"`, error)
-  }
-}
-
-const readMetadataFromAdapter = (key: string): StorageMetadata | undefined => {
-  try {
-    return storageAdapter.readMetadata(key)
-  } catch (error) {
-    console.warn(`[useKV] Storage adapter metadata read failed for key "${key}"`, error)
-    return undefined
-  }
-}
-
-const writeMetadataToAdapter = (key: string, metadata: StorageMetadata): void => {
-  try {
-    storageAdapter.writeMetadata(key, metadata)
-  } catch (error) {
-    console.warn(`[useKV] Storage adapter metadata write failed for key "${key}"`, error)
-  }
-}
-
-const removeMetadataFromAdapter = (key: string): void => {
-  try {
-    storageAdapter.removeMetadata(key)
-  } catch (error) {
-    console.warn(`[useKV] Storage adapter metadata remove failed for key "${key}"`, error)
-  }
-}
-
-const DEFAULT_METADATA: StorageMetadata = { lastUpdatedAt: 0, lastSyncedAt: null }
-
-export const setKVStorageAdapter = (adapter?: StorageAdapter): void => {
-  storageAdapter = adapter ?? buildDefaultAdapter()
 }
 
 const resolveInitial = <T,>(value: InitialValue<T>): T =>
@@ -445,6 +304,104 @@ export function useKV<T>(
     },
     []
   )
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return
+    }
+
+    const handleStorage = (event: StorageEvent) => {
+      if (event.storageArea !== window.localStorage) {
+        return
+      }
+
+      const dataKey = `${STORAGE_PREFIX}${keyRef.current}`
+      const metadataKey = `${METADATA_PREFIX}${keyRef.current}`
+
+      if (event.key === dataKey) {
+        if (event.newValue === null) {
+          const fallback = resolveInitial(defaultSourceRef.current)
+          memoryStore.set(keyRef.current, fallback)
+          revisionRef.current += 1
+          metadataRef.current = { ...DEFAULT_METADATA }
+          hasPendingSyncRef.current = false
+          setValue(fallback)
+          return
+        }
+
+        try {
+          const incoming = JSON.parse(event.newValue) as T
+          const localValue = memoryStore.has(keyRef.current)
+            ? (memoryStore.get(keyRef.current) as T)
+            : undefined
+
+          const shouldAccept = optionsRef.current?.shouldAcceptHydration
+            ? optionsRef.current.shouldAcceptHydration(incoming, {
+                key: keyRef.current,
+                localValue,
+                metadata: metadataRef.current,
+                pendingSync: hasPendingSyncRef.current
+              })
+            : true
+
+          if (!shouldAccept) {
+            return
+          }
+
+          memoryStore.set(keyRef.current, incoming)
+          revisionRef.current += 1
+          setValue(incoming)
+
+          const latestMetadata = readMetadataFromAdapter(keyRef.current)
+          if (latestMetadata) {
+            metadataRef.current = latestMetadata
+            hasPendingSyncRef.current =
+              latestMetadata.lastSyncedAt === null ||
+              latestMetadata.lastSyncedAt < latestMetadata.lastUpdatedAt
+          }
+        } catch (error) {
+          console.warn(
+            `[useKV] Failed to parse storage event payload for key "${keyRef.current}"`,
+            error
+          )
+        }
+
+        return
+      }
+
+      if (event.key === metadataKey) {
+        if (!event.newValue) {
+          metadataRef.current = { ...DEFAULT_METADATA }
+          hasPendingSyncRef.current = false
+          return
+        }
+
+        try {
+          const parsed = JSON.parse(event.newValue) as Partial<StorageMetadata>
+          if (typeof parsed?.lastUpdatedAt === 'number') {
+            const lastSyncedAt =
+              typeof parsed.lastSyncedAt === 'number' ? parsed.lastSyncedAt : null
+            metadataRef.current = {
+              lastUpdatedAt: parsed.lastUpdatedAt,
+              lastSyncedAt
+            }
+            hasPendingSyncRef.current =
+              lastSyncedAt === null || lastSyncedAt < parsed.lastUpdatedAt
+          }
+        } catch (error) {
+          console.warn(
+            `[useKV] Failed to parse storage event metadata for key "${keyRef.current}"`,
+            error
+          )
+        }
+      }
+    }
+
+    window.addEventListener('storage', handleStorage)
+    return () => {
+      window.removeEventListener('storage', handleStorage)
+    }
+  }, [])
 
   return [value, update]
 }

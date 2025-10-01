@@ -147,6 +147,12 @@ re-initialization, and collaboration history replay.
   `localStorage` mirror repopulates knowledge entries while the persistence API
   stays offline. To verify the metadata guard against stale hydration, execute
   `npx vitest run tests/components/app.knowledge-sync.test.tsx`.
+- Cross-tab sessions now subscribe to `storage` events so updates in one
+  browser tab refresh the others without requiring manual reloads. Validate the
+  listener with
+  `npx vitest run tests/hooks/useKV.test.tsx -t "syncs updates from other tabs without issuing duplicate persistence writes"`
+  and ensure regressive payloads are still rejected via the accompanying
+  predicate-focused test case.
 - Session reset diagnostics can be enabled via
   `window.localStorage.setItem('eon.debugSessionTrace', 'true')`. The enhanced
   `useSessionDiagnostics` hook logs mounts, unmounts, and unexpected tab resets
