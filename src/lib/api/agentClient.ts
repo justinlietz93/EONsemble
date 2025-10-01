@@ -1,21 +1,16 @@
 import type { ProviderSettings } from '@/types/agent'
-
 const DEFAULT_TIMEOUT_MS = 30_000
 const STREAM_DELIMITER = '\n'
-
 type ChatRole = 'system' | 'user' | 'assistant'
-
 export interface ChatMessage {
   role: ChatRole
   content: string
 }
-
 export interface AgentClientConfig {
   ollamaBaseUrl: string
   qdrantBaseUrl: string | null
   qdrantApiKey: string | null
 }
-
 export interface PostChatRequest {
   provider: 'ollama'
   model: string
@@ -26,32 +21,26 @@ export interface PostChatRequest {
   signal?: AbortSignal
   timeoutMs?: number
 }
-
 export interface PostChatResult {
   text: string
 }
-
 export interface EmbedRequest {
   model: string
   input: string
   signal?: AbortSignal
   timeoutMs?: number
 }
-
 export interface EmbedResult {
   embedding: number[]
 }
-
 export interface QdrantProbeResult {
   status: 'ready' | 'error'
   message: string
   collections?: number
 }
-
 export interface ListModelsResult {
   models: string[]
 }
-
 export class AgentClientError extends Error {
   readonly status?: number
   readonly url?: string
@@ -67,9 +56,7 @@ export class AgentClientError extends Error {
     }
   }
 }
-
 let activeConfig: AgentClientConfig | null = null
-
 const sanitizeBaseUrl = (value: string | undefined | null, fallback: string): string => {
   if (!value) {
     return fallback
@@ -80,7 +67,6 @@ const sanitizeBaseUrl = (value: string | undefined | null, fallback: string): st
   }
   return trimmed.replace(/\/+$/u, '')
 }
-
 const resolveEnv = (key: 'VITE_OLLAMA_BASE_URL' | 'VITE_QDRANT_BASE_URL'): string | undefined => {
   try {
     return (import.meta as ImportMeta | undefined)?.env?.[key]
@@ -88,24 +74,20 @@ const resolveEnv = (key: 'VITE_OLLAMA_BASE_URL' | 'VITE_QDRANT_BASE_URL'): strin
     return undefined
   }
 }
-
 const DEFAULT_OLLAMA_BASE = sanitizeBaseUrl(
   resolveEnv('VITE_OLLAMA_BASE_URL'),
   'http://localhost:11434'
 )
-
 const DEFAULT_QDRANT_BASE = sanitizeBaseUrl(
   resolveEnv('VITE_QDRANT_BASE_URL'),
   'http://localhost:6333'
 )
-
 const getGlobalFetch = (): typeof fetch => {
   if (typeof fetch !== 'function') {
     throw new AgentClientError('Global fetch is unavailable in this environment')
   }
   return fetch
 }
-
 const ensureConfig = (settings?: ProviderSettings | null): AgentClientConfig => {
   if (settings || !activeConfig) {
     const ollamaBase = sanitizeBaseUrl(settings?.ollama?.baseUrl, DEFAULT_OLLAMA_BASE)
@@ -118,17 +100,14 @@ const ensureConfig = (settings?: ProviderSettings | null): AgentClientConfig => 
   }
   return activeConfig!
 }
-
 export const configureAgentClient = (settings?: ProviderSettings | null): AgentClientConfig =>
   ensureConfig(settings)
-
 export const getAgentClientConfig = (): AgentClientConfig => {
   if (!activeConfig) {
     activeConfig = ensureConfig()
   }
   return activeConfig
 }
-
 const bindAbortSignals = (controller: AbortController, external?: AbortSignal): void => {
   if (!external) {
     return
@@ -140,7 +119,6 @@ const bindAbortSignals = (controller: AbortController, external?: AbortSignal): 
   const abort = (): void => controller.abort()
   external.addEventListener('abort', abort, { once: true })
 }
-
 const withTimeout = async <T>(
   action: (signal: AbortSignal) => Promise<T>,
   timeoutMs: number,
@@ -160,10 +138,8 @@ const withTimeout = async <T>(
     clearTimeout(timer)
   }
 }
-
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null
-
 const extractOllamaMessageCandidate = (payload: unknown): string | unknown[] | null => {
   if (!isRecord(payload)) {
     return null
@@ -193,7 +169,6 @@ const extractOllamaMessageCandidate = (payload: unknown): string | unknown[] | n
 
   return null
 }
-
 const flattenOllamaSegments = (segments: unknown[]): string =>
   segments
     .map(segment => {
@@ -206,7 +181,6 @@ const flattenOllamaSegments = (segments: unknown[]): string =>
       return ''
     })
     .join('')
-
 const parseOllamaContent = (payload: unknown): string | null => {
   const candidate = extractOllamaMessageCandidate(payload)
   if (typeof candidate === 'string') {
@@ -217,7 +191,6 @@ const parseOllamaContent = (payload: unknown): string | null => {
   }
   return null
 }
-
 const parseOllamaError = (payload: unknown, status: number): string => {
   if (!isRecord(payload)) {
     return `HTTP ${status}`
@@ -228,7 +201,6 @@ const parseOllamaError = (payload: unknown, status: number): string => {
   }
   return `HTTP ${status}`
 }
-
 const decodeStreamLines = async (
   body: ReadableStream<Uint8Array>,
   onChunk?: (text: string) => void

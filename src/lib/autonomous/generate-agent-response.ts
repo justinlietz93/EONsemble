@@ -25,8 +25,6 @@ export async function generateAgentResponse(
   knowledgeBase: KnowledgeEntry[],
   providerConfigs?: ProviderSettings
 ): Promise<string> {
-  console.log('Generating response for agent:', agentName)
-
   const collaborationContext = buildCollaborationContext(goal, derivationHistory, knowledgeBase)
   const vectorMatches = rankVectorMatches(collaborationContext.documents, collaborationContext.queryText)
   const graphInsights = deriveGraphInsights(vectorMatches, collaborationContext.documents)
@@ -36,13 +34,7 @@ export async function generateAgentResponse(
   const basePrompt = buildInitialUserPrompt(goal, contextSections)
   const chatMessages = buildChatMessages(agentConfig.systemPrompt, basePrompt)
   const textPrompt = buildTextPrompt(agentConfig.systemPrompt, basePrompt)
-
-  console.log('Calling LLM with prompt for agent:', agentName)
   const initialResponse = await callProviderLLM(agentConfig, providerConfigs, chatMessages, textPrompt)
-  console.log('LLM response received, length:', initialResponse.length)
-
   const completed = await ensureCompletion(agentConfig, initialResponse, contextSections, agentName, providerConfigs)
-  console.log('Final response length after completion handling:', completed.length)
-
   return normalizeCompletedResponse(completed)
 }
