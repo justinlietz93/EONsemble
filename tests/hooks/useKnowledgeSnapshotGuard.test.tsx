@@ -128,6 +128,8 @@ describe('useKnowledgeSnapshotGuard', () => {
     return waitFor(() => {
       expect(sessionStorage.getItem(storageKey)).toBeNull()
       expect(localStorage.getItem(`${storageKey}.local`)).toBeNull()
+      const localKeys = Array.from({ length: localStorage.length }, (_, index) => localStorage.key(index))
+      expect(localKeys.filter(key => key?.startsWith(`${storageKey}.local`))).toHaveLength(0)
     })
   })
 
@@ -167,5 +169,53 @@ describe('useKnowledgeSnapshotGuard', () => {
       expect(result.current.knowledge).toHaveLength(1)
     })
     expect(result.current.knowledge[0]?.id).toBe('local-only')
+  })
+
+  it('persists large knowledge snapshots using chunked storage and restores them after remount', async () => {
+    const storageKey = 'test.large.snapshot'
+    const largeEntry = {
+      ...buildEntry('large'),
+      content: 'quantum persistence '.repeat(40_000)
+    }
+
+    const { unmount } = renderHook(() => {
+      const [knowledge, setKnowledge] = useState<KnowledgeEntry[]>([largeEntry])
+      const kvSet = useCallback((updater: KVUpdater<KnowledgeEntry[]>) => {
+        setKnowledge(prev => (typeof updater === 'function' ? updater(prev) : updater))
+      }, [])
+
+      useKnowledgeSnapshotGuard(knowledge, kvSet, { storageKey })
+
+      return { knowledge }
+    })
+
+    const manifest = JSON.parse(localStorage.getItem(`${storageKey}.local`) ?? '{}') as Record<string, unknown>
+    expect(manifest.__knowledgeSnapshotChunkManifest).toBe(true)
+    const chunkCount = typeof manifest.chunkCount === 'number' ? manifest.chunkCount : 0
+    expect(chunkCount).toBeGreaterThan(0)
+
+    for (let index = 0; index < chunkCount; index += 1) {
+      expect(localStorage.getItem(`${storageKey}.local::chunk::${index}`)).not.toBeNull()
+    }
+
+    unmount()
+
+    const { result } = renderHook(() => {
+      const [knowledge, setKnowledge] = useState<KnowledgeEntry[]>([])
+      const kvSet = useCallback((updater: KVUpdater<KnowledgeEntry[]>) => {
+        setKnowledge(prev => (typeof updater === 'function' ? updater(prev) : updater))
+      }, [])
+
+      useKnowledgeSnapshotGuard(knowledge, kvSet, { storageKey, restoreOnInitialLoad: true })
+
+      return { knowledge }
+    })
+
+    await waitFor(() => {
+      expect(result.current.knowledge).toHaveLength(1)
+    })
+
+    expect(result.current.knowledge[0]?.id).toBe('large')
+    expect(result.current.knowledge[0]?.content.length).toBe(largeEntry.content.length)
   })
 })

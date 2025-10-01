@@ -10,6 +10,16 @@ const cloneEntries = (entries: KnowledgeEntry[]): KnowledgeEntry[] =>
   }))
 
 const LOCAL_STORAGE_SUFFIX = '.local'
+const SNAPSHOT_CHUNK_DELIMITER = '::chunk::'
+const SNAPSHOT_CHUNK_MANIFEST_FLAG = '__knowledgeSnapshotChunkManifest'
+const SNAPSHOT_CHUNK_MANIFEST_VERSION = 1
+const SNAPSHOT_CHUNK_SIZE_LIMIT = 250_000
+
+type SnapshotChunkManifest = {
+  [SNAPSHOT_CHUNK_MANIFEST_FLAG]: true
+  version: number
+  chunkCount: number
+}
 
 const getStorage = (label: 'sessionStorage' | 'localStorage'): Storage | null => {
   if (typeof window === 'undefined') {
@@ -24,7 +34,52 @@ const getStorage = (label: 'sessionStorage' | 'localStorage'): Storage | null =>
   }
 }
 
-const readSnapshotFromStorage = (storage: Storage | null, key: string, label: string): KnowledgeEntry[] | null => {
+const buildSnapshotChunkKey = (baseKey: string, index: number): string =>
+  `${baseKey}${SNAPSHOT_CHUNK_DELIMITER}${index}`
+
+const isSnapshotChunkManifest = (candidate: unknown): candidate is SnapshotChunkManifest => {
+  if (typeof candidate !== 'object' || candidate === null) {
+    return false
+  }
+
+  const record = candidate as Record<string, unknown>
+  return (
+    record[SNAPSHOT_CHUNK_MANIFEST_FLAG] === true &&
+    typeof record.chunkCount === 'number' &&
+    Number.isFinite(record.chunkCount) &&
+    record.chunkCount >= 0 &&
+    typeof record.version === 'number' &&
+    record.version === SNAPSHOT_CHUNK_MANIFEST_VERSION
+  )
+}
+
+const tryParseSnapshotJSON = <T,>(value: string, label: string): T | null => {
+  try {
+    return JSON.parse(value) as T
+  } catch (error) {
+    console.warn(`[KnowledgeSnapshotGuard] Failed to parse persisted snapshot from ${label}`, error)
+    return null
+  }
+}
+
+const materializeEntries = (payload: unknown): KnowledgeEntry[] | null => {
+  if (!Array.isArray(payload)) {
+    return null
+  }
+
+  return payload
+    .filter((entry): entry is KnowledgeEntry => typeof entry === 'object' && entry !== null)
+    .map(entry => ({
+      ...entry,
+      tags: Array.isArray(entry.tags) ? [...entry.tags] : []
+    }))
+}
+
+const readSnapshotFromStorage = (
+  storage: Storage | null,
+  key: string,
+  label: 'sessionStorage' | 'localStorage'
+): KnowledgeEntry[] | null => {
   if (!storage) {
     return null
   }
@@ -35,19 +90,36 @@ const readSnapshotFromStorage = (storage: Storage | null, key: string, label: st
       return null
     }
 
-    const parsed = JSON.parse(raw)
-    if (!Array.isArray(parsed)) {
+    const parsed = tryParseSnapshotJSON<unknown>(raw, label)
+    if (!parsed) {
       return null
     }
 
-    return parsed
-      .filter((entry): entry is KnowledgeEntry => typeof entry === 'object' && entry !== null)
-      .map(entry => ({
-        ...entry,
-        tags: Array.isArray(entry.tags) ? [...entry.tags] : []
-      }))
+    if (isSnapshotChunkManifest(parsed)) {
+      const chunks: string[] = []
+
+      for (let index = 0; index < parsed.chunkCount; index += 1) {
+        const chunkKey = buildSnapshotChunkKey(key, index)
+        const chunk = storage.getItem(chunkKey)
+
+        if (typeof chunk !== 'string') {
+          console.warn(
+            `[KnowledgeSnapshotGuard] Missing snapshot chunk ${index + 1}/${parsed.chunkCount} while reading ${label}.`
+          )
+          return null
+        }
+
+        chunks.push(chunk)
+      }
+
+      const serialized = chunks.join('')
+      const chunkPayload = tryParseSnapshotJSON<unknown>(serialized, label)
+      return materializeEntries(chunkPayload)
+    }
+
+    return materializeEntries(parsed)
   } catch (error) {
-    console.warn(`[KnowledgeSnapshotGuard] Failed to parse persisted snapshot from ${label}`, error)
+    console.warn(`[KnowledgeSnapshotGuard] Failed to read persisted snapshot from ${label}`, error)
     return null
   }
 }
@@ -63,46 +135,135 @@ const readPersistedSnapshot = (storageKey: string): KnowledgeEntry[] | null => {
   return readSnapshotFromStorage(localStorage, `${storageKey}${LOCAL_STORAGE_SUFFIX}`, 'localStorage')
 }
 
-const persistSnapshot = (storageKey: string, entries: KnowledgeEntry[]): void => {
-  const serialized = JSON.stringify(entries)
-
-  const sessionStorage = getStorage('sessionStorage')
-  if (sessionStorage) {
-    try {
-      sessionStorage.setItem(storageKey, serialized)
-    } catch (error) {
-      console.warn('[KnowledgeSnapshotGuard] Failed to persist session snapshot', error)
-    }
+const getStoredSnapshotManifest = (storage: Storage | null, key: string): SnapshotChunkManifest | null => {
+  if (!storage) {
+    return null
   }
 
-  const localStorage = getStorage('localStorage')
-  if (localStorage) {
+  const raw = storage.getItem(key)
+  if (!raw) {
+    return null
+  }
+
+  const parsed = tryParseSnapshotJSON<unknown>(raw, 'manifest')
+  if (parsed && isSnapshotChunkManifest(parsed)) {
+    return parsed
+  }
+
+  return null
+}
+
+const removeSnapshotChunks = (
+  storage: Storage,
+  key: string,
+  manifest?: SnapshotChunkManifest | null
+): void => {
+  const descriptor = manifest ?? getStoredSnapshotManifest(storage, key)
+  if (!descriptor) {
+    return
+  }
+
+  for (let index = 0; index < descriptor.chunkCount; index += 1) {
+    const chunkKey = buildSnapshotChunkKey(key, index)
     try {
-      localStorage.setItem(`${storageKey}${LOCAL_STORAGE_SUFFIX}`, serialized)
+      storage.removeItem(chunkKey)
     } catch (error) {
-      console.warn('[KnowledgeSnapshotGuard] Failed to persist local snapshot backup', error)
+      console.warn(
+        `[KnowledgeSnapshotGuard] Failed to remove snapshot chunk ${index + 1}/${descriptor.chunkCount} for key "${key}"`,
+        error
+      )
     }
   }
 }
 
-const clearPersistedSnapshot = (storageKey: string): void => {
-  const sessionStorage = getStorage('sessionStorage')
-  if (sessionStorage) {
-    try {
-      sessionStorage.removeItem(storageKey)
-    } catch (error) {
-      console.warn('[KnowledgeSnapshotGuard] Failed to clear session snapshot', error)
-    }
+const persistSerializedSnapshot = (
+  storage: Storage | null,
+  key: string,
+  serialized: string,
+  label: 'sessionStorage' | 'localStorage'
+): void => {
+  if (!storage) {
+    return
   }
 
-  const localStorage = getStorage('localStorage')
-  if (localStorage) {
-    try {
-      localStorage.removeItem(`${storageKey}${LOCAL_STORAGE_SUFFIX}`)
-    } catch (error) {
-      console.warn('[KnowledgeSnapshotGuard] Failed to clear local snapshot backup', error)
+  try {
+    const existingManifest = getStoredSnapshotManifest(storage, key)
+    removeSnapshotChunks(storage, key, existingManifest)
+
+    if (serialized.length <= SNAPSHOT_CHUNK_SIZE_LIMIT) {
+      storage.setItem(key, serialized)
+      return
     }
+
+    const chunkCount = Math.ceil(serialized.length / SNAPSHOT_CHUNK_SIZE_LIMIT)
+    const manifest: SnapshotChunkManifest = {
+      [SNAPSHOT_CHUNK_MANIFEST_FLAG]: true,
+      version: SNAPSHOT_CHUNK_MANIFEST_VERSION,
+      chunkCount
+    }
+
+    const writtenChunks: string[] = []
+
+    try {
+      for (let index = 0; index < chunkCount; index += 1) {
+        const start = index * SNAPSHOT_CHUNK_SIZE_LIMIT
+        const chunk = serialized.slice(start, start + SNAPSHOT_CHUNK_SIZE_LIMIT)
+        const chunkKey = buildSnapshotChunkKey(key, index)
+        storage.setItem(chunkKey, chunk)
+        writtenChunks.push(chunkKey)
+      }
+
+      storage.setItem(key, JSON.stringify(manifest))
+    } catch (error) {
+      for (const chunkKey of writtenChunks) {
+        try {
+          storage.removeItem(chunkKey)
+        } catch {
+          // Best-effort cleanup; the original write already logged the failure.
+        }
+      }
+
+      throw error
+    }
+  } catch (error) {
+    console.warn(`[KnowledgeSnapshotGuard] Failed to persist snapshot in ${label}`, error)
   }
+}
+
+const removeSnapshotFromStorage = (
+  storage: Storage | null,
+  key: string,
+  label: 'sessionStorage' | 'localStorage'
+): void => {
+  if (!storage) {
+    return
+  }
+
+  try {
+    const manifest = getStoredSnapshotManifest(storage, key)
+    storage.removeItem(key)
+    removeSnapshotChunks(storage, key, manifest)
+  } catch (error) {
+    console.warn(`[KnowledgeSnapshotGuard] Failed to clear snapshot from ${label}`, error)
+  }
+}
+
+const persistSnapshot = (storageKey: string, entries: KnowledgeEntry[]): void => {
+  const serialized = JSON.stringify(entries)
+
+  const sessionStorage = getStorage('sessionStorage')
+  persistSerializedSnapshot(sessionStorage, storageKey, serialized, 'sessionStorage')
+
+  const localStorage = getStorage('localStorage')
+  persistSerializedSnapshot(localStorage, `${storageKey}${LOCAL_STORAGE_SUFFIX}`, serialized, 'localStorage')
+}
+
+const clearPersistedSnapshot = (storageKey: string): void => {
+  const sessionStorage = getStorage('sessionStorage')
+  removeSnapshotFromStorage(sessionStorage, storageKey, 'sessionStorage')
+
+  const localStorage = getStorage('localStorage')
+  removeSnapshotFromStorage(localStorage, `${storageKey}${LOCAL_STORAGE_SUFFIX}`, 'localStorage')
 }
 
 type GuardOptions = {

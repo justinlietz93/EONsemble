@@ -127,6 +127,11 @@ re-initialization, and collaboration history replay.
   remains, the guard restores the snapshot immediately, ensuring the UI stays
   populated before the persistence API responds. Validate with
   `npx vitest run tests/hooks/useKnowledgeSnapshotGuard.test.tsx -t "restores the local snapshot backup on initial load when session storage is empty"`.
+- 2025-09-29 (large snapshot support): Snapshot persistence now chunks payloads
+  larger than ~250 kB using the same manifest structure as the `useKV`
+  adapter. This prevents quota exceptions when corpora exceed 5 MB and allows
+  new tabs to rehydrate from chunked manifests. Verify with
+  `npx vitest run tests/hooks/useKnowledgeSnapshotGuard.test.tsx -t "persists large knowledge snapshots using chunked storage and restores them after remount"`.
 - Late 2025-09-29 (storage reset repro): The guard predicate now delegates to
   `detectUnexpectedKnowledgeDrop`, which treats `persistence-reset` and
   `auto-restore` tab reasons (or a `lastDetectedReset` of `persistence-reset`)

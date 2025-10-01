@@ -19,6 +19,23 @@
 - **Selected Approach**: Option 1 — add a `detectUnexpectedKnowledgeDrop` helper in `App.tsx`, expand the guard predicate to consult it, and exercise the new logic with both unit and integration coverage.
 - **Self-Critique**: The helper still relies on heuristics (tab reasons + last reset state). If future flows introduce new reset reasons the predicate might need another update; documentation now emphasises keeping the helper in sync with guard semantics.
 
+### 2025-09-29 — Chunk knowledge snapshots to survive quota failures and cross-tab reloads
+- **Context**: Users uploading large corpora still report that new tabs reopen with zero knowledge entries even though the session snapshot guard is enabled. The guard mirrors payloads into `sessionStorage`/`localStorage`, but it serializes the entire array as a single string. When the payload exceeds the ~5 MB per-item limit, both writes throw quota errors, leaving new tabs without any snapshot to restore.
+- **Options Considered**:
+  1. Mirror the chunked storage implementation used by `useKV`, writing manifest descriptors plus segmented chunks so snapshots persist regardless of size.
+  2. Compress the snapshot (e.g., JSON + gzip/base64) before writing to storage to stay under quota.
+  3. Persist only a capped subset of entries (e.g., first N) and warn when truncation occurs, trading completeness for survivability.
+  4. Move snapshot persistence to IndexedDB and load it asynchronously during restoration.
+  5. Document the limitation and instruct users to export/import knowledge manually when working with large corpora.
+- **Evaluation** (ranked by relevance & likelihood of success):
+  1. **Option 1** — Reuses proven logic, keeps reads synchronous, and requires minimal API changes. *Rank: 1*.
+  2. **Option 2** — Reduces payload size but adds binary encoding/decoding complexity and CPU cost. *Rank: 2*.
+  3. **Option 4** — Durable but introduces async hydration and additional dependencies. *Rank: 3*.
+  4. **Option 3** — Avoids quota errors but silently drops data, undermining reliability. *Rank: 4*.
+  5. **Option 5** — Leaves the regression unresolved. *Rank: 5*.
+- **Selected Approach**: Option 1 — add chunked snapshot persistence with manifest metadata so the guard can reassemble large payloads across remounts and tabs without exceeding browser limits.
+- **Self-Critique**: Duplicating chunk logic risks divergence from the primary adapter. Documented the shared assumptions (chunk size, delimiter) and added regression coverage so future refactors can consolidate the helpers.
+
 ### 2025-09-29 — Dual-layer browser mirror for resilient knowledge persistence
 - **Context**: Despite the existing `localStorage` mirror and snapshot guard, live repros still show the knowledge counter
   dropping to zero after navigating away from the Knowledge tab. Session traces reveal that the regression correlates with
@@ -681,6 +698,13 @@
     test -- --run tests/components/app.knowledge-persistence.test.tsx -t "restores knowledge when storage events force a
     persistence reset mid-session"` to verify the helper and end-to-end behaviour. Also re-ran `tests/components/screens.test.tsx`
     to confirm agentic flows stay green post-change.
+- [DONE] Chunk knowledge snapshot persistence so large payloads survive quota failures and cross-tab reloads.
+  - Acceptance: Snapshot writes succeed for payloads larger than 5 MB, and guards restore chunked manifests after remounts and
+    new-tab loads.
+  - Status Notes (2025-09-29): Added chunked snapshot helpers in `useKnowledgeSnapshotGuard`, expanded hook tests with a large
+    payload scenario, and documented the shared manifest settings for future consolidation with the primary storage adapter.
+  - Strict Review (2025-09-29): `npx vitest run tests/hooks/useKnowledgeSnapshotGuard.test.tsx` passes with the new regression
+    while `tests/components/screens.test.tsx` remains green to ensure agentic operations stay intact.
 
 ---
 
