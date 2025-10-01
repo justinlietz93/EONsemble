@@ -21,6 +21,54 @@ const dispatchStorageEvent = (key: string, newValue: string | null) => {
   window.dispatchEvent(event)
 }
 
+const createQuotaExceededError = (): DOMException | Error => {
+  try {
+    return new DOMException('The quota has been exceeded.', 'QuotaExceededError')
+  } catch {
+    const fallback = new Error('QuotaExceededError')
+    fallback.name = 'QuotaExceededError'
+    return fallback
+  }
+}
+
+class QuotaStorage implements Storage {
+  private store = new Map<string, string>()
+
+  constructor(private readonly limit: number) {}
+
+  get length(): number {
+    return this.store.size
+  }
+
+  clear(): void {
+    this.store.clear()
+  }
+
+  getItem(key: string): string | null {
+    return this.store.has(key) ? this.store.get(key)! : null
+  }
+
+  key(index: number): string | null {
+    return Array.from(this.store.keys())[index] ?? null
+  }
+
+  removeItem(key: string): void {
+    this.store.delete(key)
+  }
+
+  setItem(key: string, value: string): void {
+    if (value.length > this.limit) {
+      throw createQuotaExceededError()
+    }
+
+    this.store.set(key, value)
+  }
+
+  dump(): Record<string, string> {
+    return Object.fromEntries(this.store.entries())
+  }
+}
+
 describe('useKV', () => {
   beforeEach(() => {
     clearKVStore()
@@ -385,5 +433,55 @@ describe('useKV', () => {
     })
 
     warnSpy.mockRestore()
+  })
+
+  it('persists large payloads by chunking when browser storage rejects oversized entries', async () => {
+    const quotaStorage = new QuotaStorage(300_000)
+    const quotaSessionStorage = new QuotaStorage(300_000)
+
+    vi.stubGlobal('localStorage', quotaStorage as unknown as Storage)
+    vi.stubGlobal('sessionStorage', quotaSessionStorage as unknown as Storage)
+    setKVStorageAdapter()
+
+    fetchPersistedValue.mockResolvedValueOnce(undefined)
+    savePersistedValue.mockResolvedValue()
+
+    type Entry = { id: string; content: string }
+
+    const largeContent = 'x'.repeat(300_000)
+    const payload: Entry[] = [
+      { id: 'entry-1', content: largeContent },
+      { id: 'entry-2', content: largeContent }
+    ]
+
+    const { result, unmount } = renderHook(() => useKV<Entry[]>('large-knowledge', () => []))
+
+    act(() => {
+      result.current[1](payload)
+    })
+
+    await waitFor(() => {
+      expect(result.current[0]).toEqual(payload)
+    })
+
+    const storedKeys = Object.keys(quotaStorage.dump())
+    const manifestKey = storedKeys.find(key => key === 'eon.kv.large-knowledge')
+    const chunkKeys = storedKeys.filter(key => key.startsWith('eon.kv.chunk.large-knowledge'))
+
+    expect(manifestKey).toBeDefined()
+    expect(chunkKeys.length).toBeGreaterThan(0)
+
+    unmount?.()
+
+    const originalRemoveItem = quotaStorage.removeItem.bind(quotaStorage)
+    quotaStorage.removeItem = vi.fn()
+    clearKVStore()
+    quotaStorage.removeItem = originalRemoveItem
+
+    const { result: rerendered } = renderHook(() => useKV<Entry[]>('large-knowledge', () => []))
+
+    await waitFor(() => {
+      expect(rerendered.current[0]).toEqual(payload)
+    })
   })
 })

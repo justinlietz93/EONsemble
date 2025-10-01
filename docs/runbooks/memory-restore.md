@@ -88,8 +88,11 @@ re-initialization, and collaboration history replay.
   `window.localStorage` under the `eon.kv.<key>` namespace. On reload the mirror
   seeds the in-memory store before server hydration, ensuring knowledge remains
   visible even if persistence fetches fail. Mirror entries are cleared by
-  `clearKVStore()` and are subject to the browser's ~5–10 MB quota; large corpus
-  uploads should therefore be chunked conservatively.
+  `clearKVStore()` and now automatically chunk large payloads across multiple
+  `localStorage` records when the JSON blob exceeds ~250 kB. This avoids the
+  single-entry quota that previously caused knowledge loss after uploading
+  multi-megabyte corpora. Validate with
+  `npx vitest run tests/hooks/useKV.test.tsx -t "persists large payloads by chunking when browser storage rejects oversized entries"`.
 - The mirror now stores sync metadata (`lastUpdatedAt`, `lastSyncedAt`) so the
   hook can detect unsynchronised writes. If hydration returns an empty payload
   while the mirror reports pending changes, `useKV` skips the server data,

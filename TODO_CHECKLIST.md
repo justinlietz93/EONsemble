@@ -128,6 +128,32 @@
   accept empty payloads (e.g., defaults) do not thrash the server. Will guard by only replaying when the local mirror is
   non-empty and the default value is not `null`.
 
+### 2025-09-29 — Prevent knowledge loss when `localStorage` quota rejects large corpora
+- **Context**: Manual repro with a 2.8 MB markdown corpus succeeds initially but immediately resets to 0 entries after toggling
+  to another browser tab and back. Console shows `[useKV] Failed to persist browser storage value...` warnings, confirming
+  `localStorage` is rejecting the JSON payload because the knowledge base exceeds the ~5 MB quota. With the mirror write
+  failing we rely solely on in-memory state, so any remount (tab restore, reload, secondary window) hydrates an empty array and
+  the guard cannot restore without a persisted snapshot.
+- **Options Considered**:
+  1. Implement chunked storage in the `useKV` browser adapter, spreading large payloads across multiple `localStorage` keys and
+     reassembling on read so quota per-entry is avoided while keeping the synchronous API.
+  2. Swap the browser adapter to `IndexedDB` via a thin async wrapper and refactor `useKV` to support asynchronous storage
+     primitives.
+  3. Compress knowledge payloads (e.g., using LZ-String) before writing to storage to shrink the serialized size.
+  4. Stream uploads directly to the persistence API and drop the browser mirror for large corpora, treating the backend as the
+     source of truth.
+  5. Limit corpus uploads or knowledge merges to keep payloads below 5 MB, surfacing a UI warning when the limit is exceeded.
+- **Evaluation** (ranked by relevance & likelihood of success):
+  1. **Option 1** — Works within current synchronous adapter contract, avoids major refactors, preserves offline/local flows.
+  2. **Option 2** — Most robust long-term but requires reworking the entire `useKV` API surface and all tests.
+  3. **Option 3** — Helps but adds CPU overhead and still risks exceeding quota with very large corpora.
+  4. **Option 4** — Forces online connectivity and reintroduces race conditions when the persistence API is unhealthy.
+  5. **Option 5** — User-hostile; prevents legitimate large knowledge bases from persisting.
+- **Selected Approach**: Option 1 — extend the adapter with chunked read/write/remove primitives keyed off a deterministic
+  manifest so large payloads bypass per-item quotas without API changes.
+- **Self-Critique**: Chunk manifests add complexity (cleanup, storage events) and still rely on `localStorage`'s overall
+  capacity. Will document remaining risks and keep the manifest format versioned to enable future migrations.
+
 ### 2025-09-29 — Knowledge Mirror Guard Still Loses Entries After Tab Switch
 - **Context**: The live app continues to drop the knowledge counter to zero immediately after switching away from and back to
   the Knowledge tab, even after implementing the metadata-based mirror guard. This indicates either the guard is not covering
@@ -526,7 +552,42 @@
     - Selection: Option 1 — enrich `useSessionDiagnostics` with a caller-supplied reason string so we can attribute resets to guard logic versus user input.
     - Self-Critique: Relies on call sites threading accurate reason metadata; will double-check guard paths set descriptive reasons before marking this item complete.
   - 2025-09-29 Update: Added tab change reason + reset status metadata to `useSessionDiagnostics`, threaded guard-origin reasons from `<App />`, and expanded tests to confirm logs include reason/lastReset context. Regression suites now expose whether a goal-setup switch stemmed from user input versus persistence fallbacks.
-  - Strict Judge Review (2025-09-29): Verified new diagnostics emit structured reason tags during tab toggles (user clicks vs. guard restores) and exercised both hook-level and app-level tests to ensure coverage; noted that true unexpected resets will surface as `reason=persistence-reset` with `lastReset=persistence-reset` once reproduced outside deliberate user navigation.
+- Strict Judge Review (2025-09-29): Verified new diagnostics emit structured reason tags during tab toggles (user clicks vs. guard restores) and exercised both hook-level and app-level tests to ensure coverage; noted that true unexpected resets will surface as `reason=persistence-reset` with `lastReset=persistence-reset` once reproduced outside deliberate user navigation.
+
+---
+
+## Knowledge Persistence — Local Mirror Quota Regression
+- [DONE] Reproduce the quota failure and capture failing assertions to lock the regression before applying a fix.
+  - Decision Log (2025-09-29):
+    1. Add a Vitest harness that seeds `localStorage.setItem` to throw a quota error once payloads exceed a threshold and
+       confirm knowledge disappears on remount.
+    2. Rely on manual repro only and document console warnings.
+    3. Use Playwright to drive a real browser session that uploads a large corpus and asserts state loss.
+    4. Add runtime instrumentation that increments a counter when storage writes fail and assert via Jest mocks.
+    5. Simulate quota failure by monkey-patching `JSON.stringify` to return huge strings in existing tests.
+    - Ranking: (1) targeted Vitest harness > (4) instrumentation counter > (3) Playwright session > (2) manual repro > (5)
+      stringify monkey patch.
+    - Selection: Option 1 — build a deterministic Vitest regression that forces a quota error so the failure reproduces without
+      manual browsers.
+    - Self-Critique: Mocking quota behaviour risks diverging from browser semantics; will ensure the mock throws the same
+      `DOMException` shape real browsers use.
+  - Status Notes (2025-09-29): Harness landed via `QuotaStorage` stub; new Vitest case fails without the manifest-aware adapter
+    and documents the quota exception signature.
+- [DONE] Implement chunked storage in the browser adapter so large payloads persist without quota rejections.
+  - Acceptance: `useKV` writes succeed after the fix even when a single JSON payload exceeds the per-item limit; manifest cleanup
+    confirmed via regression.
+  - Follow-up: Ensure storage event hydration reassembles the manifest payload on secondary tabs.
+  - Status Notes (2025-09-29): Added manifest read/write helpers in `useKV.storage.ts`, updated the storage-event listener to
+    hydrate via the adapter, and guarded chunk cleanup during removals.
+- [DONE] Extend automated coverage to prove chunked storage survives remounts and cross-tab hydration.
+  - Acceptance: Hook-level tests cover manifest write/read/remove, and app-level tests simulate quota errors plus recovery.
+  - Strict Review Target: Validate both knowledge persistence and agentic operations remain green post-change.
+  - Status Notes (2025-09-29): `tests/hooks/useKV.test.tsx` now includes a quota regression harness exercising chunk manifests
+    and remount hydration.
+- [DONE] Document the chunked storage workflow, including known limits and verification commands, in the memory restore
+  runbook and checklist.
+  - Status Notes (2025-09-29): Runbook appendix updated with the chunking behaviour and associated Vitest command; checklist now
+    references the new regression.
 
 ---
 

@@ -329,41 +329,52 @@ export function useKV<T>(
           return
         }
 
+        let incoming: T | undefined
+
         try {
-          const incoming = JSON.parse(event.newValue) as T
-          const localValue = memoryStore.has(keyRef.current)
-            ? (memoryStore.get(keyRef.current) as T)
-            : undefined
-
-          const shouldAccept = optionsRef.current?.shouldAcceptHydration
-            ? optionsRef.current.shouldAcceptHydration(incoming, {
-                key: keyRef.current,
-                localValue,
-                metadata: metadataRef.current,
-                pendingSync: hasPendingSyncRef.current
-              })
-            : true
-
-          if (!shouldAccept) {
-            return
-          }
-
-          memoryStore.set(keyRef.current, incoming)
-          revisionRef.current += 1
-          setValue(incoming)
-
-          const latestMetadata = readMetadataFromAdapter(keyRef.current)
-          if (latestMetadata) {
-            metadataRef.current = latestMetadata
-            hasPendingSyncRef.current =
-              latestMetadata.lastSyncedAt === null ||
-              latestMetadata.lastSyncedAt < latestMetadata.lastUpdatedAt
+          incoming = readFromAdapter<T>(keyRef.current)
+          if (incoming === undefined) {
+            incoming = JSON.parse(event.newValue) as T
           }
         } catch (error) {
           console.warn(
             `[useKV] Failed to parse storage event payload for key "${keyRef.current}"`,
             error
           )
+          return
+        }
+
+        if (incoming === undefined) {
+          return
+        }
+
+        const localValue = memoryStore.has(keyRef.current)
+          ? (memoryStore.get(keyRef.current) as T)
+          : undefined
+
+        const shouldAccept = optionsRef.current?.shouldAcceptHydration
+          ? optionsRef.current.shouldAcceptHydration(incoming, {
+              key: keyRef.current,
+              localValue,
+              metadata: metadataRef.current,
+              pendingSync: hasPendingSyncRef.current
+            })
+          : true
+
+        if (!shouldAccept) {
+          return
+        }
+
+        memoryStore.set(keyRef.current, incoming)
+        revisionRef.current += 1
+        setValue(incoming)
+
+        const latestMetadata = readMetadataFromAdapter(keyRef.current)
+        if (latestMetadata) {
+          metadataRef.current = latestMetadata
+          hasPendingSyncRef.current =
+            latestMetadata.lastSyncedAt === null ||
+            latestMetadata.lastSyncedAt < latestMetadata.lastUpdatedAt
         }
 
         return
