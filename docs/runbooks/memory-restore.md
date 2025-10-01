@@ -90,6 +90,13 @@ re-initialization, and collaboration history replay.
   visible even if persistence fetches fail. Mirror entries are cleared by
   `clearKVStore()` and are subject to the browser's ~5–10 MB quota; large corpus
   uploads should therefore be chunked conservatively.
+- The mirror now stores sync metadata (`lastUpdatedAt`, `lastSyncedAt`) so the
+  hook can detect unsynchronised writes. If hydration returns an empty payload
+  while the mirror reports pending changes, `useKV` skips the server data,
+  replays the mirror payload back to the persistence API, and keeps the UI in
+  sync. Inspect `tests/hooks/useKV.test.tsx` (`keeps mirrored values when pending
+  sync metadata exists...`) or `tests/components/app.knowledge-sync.test.tsx` for
+  regression coverage.
 - When investigating suspected regressions, reproduce the offline scenario by
   mocking `fetchPersistedValue` to resolve `undefined` and verify that
   previously added entries remain visible.
@@ -117,7 +124,8 @@ re-initialization, and collaboration history replay.
   `npx vitest run tests/components/app.knowledge-persistence.test.tsx -t "browser mirror"`,
   which unmounts the app, clears the in-memory cache, and confirms the
   `localStorage` mirror repopulates knowledge entries while the persistence API
-  stays offline.
+  stays offline. To verify the metadata guard against stale hydration, execute
+  `npx vitest run tests/components/app.knowledge-sync.test.tsx`.
 - Session reset diagnostics can be enabled via
   `window.localStorage.setItem('eon.debugSessionTrace', 'true')`. The enhanced
   `useSessionDiagnostics` hook logs mounts, unmounts, and unexpected tab resets

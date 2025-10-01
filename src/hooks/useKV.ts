@@ -10,11 +10,20 @@ export type KVUpdater<T> = Updater<T>
 const memoryStore = new Map<string, unknown>()
 
 const STORAGE_PREFIX = 'eon.kv.'
+const METADATA_PREFIX = `${STORAGE_PREFIX}meta.`
+
+type StorageMetadata = {
+  lastUpdatedAt: number
+  lastSyncedAt: number | null
+}
 
 type StorageAdapter = {
   read<T>(key: string): T | undefined
   write<T>(key: string, value: T): void
   remove(key: string): void
+  readMetadata(key: string): StorageMetadata | undefined
+  writeMetadata(key: string, metadata: StorageMetadata): void
+  removeMetadata(key: string): void
 }
 
 const buildDefaultAdapter = (): StorageAdapter => {
@@ -22,7 +31,10 @@ const buildDefaultAdapter = (): StorageAdapter => {
     return {
       read: () => undefined,
       write: () => {},
-      remove: () => {}
+      remove: () => {},
+      readMetadata: () => undefined,
+      writeMetadata: () => {},
+      removeMetadata: () => {}
     }
   }
 
@@ -52,6 +64,44 @@ const buildDefaultAdapter = (): StorageAdapter => {
         window.localStorage?.removeItem(`${STORAGE_PREFIX}${key}`)
       } catch (error) {
         console.warn(`[useKV] Failed to remove browser storage value for key "${key}"`, error)
+      }
+    },
+    readMetadata: (key: string): StorageMetadata | undefined => {
+      try {
+        const raw = window.localStorage?.getItem(`${METADATA_PREFIX}${key}`)
+        if (!raw) {
+          return undefined
+        }
+
+        const parsed = JSON.parse(raw) as Partial<StorageMetadata>
+        if (typeof parsed?.lastUpdatedAt !== 'number') {
+          return undefined
+        }
+
+        const lastSyncedAt =
+          typeof parsed.lastSyncedAt === 'number' ? parsed.lastSyncedAt : null
+
+        return {
+          lastUpdatedAt: parsed.lastUpdatedAt,
+          lastSyncedAt
+        }
+      } catch (error) {
+        console.warn(`[useKV] Failed to parse browser storage metadata for key "${key}"`, error)
+        return undefined
+      }
+    },
+    writeMetadata: (key: string, metadata: StorageMetadata): void => {
+      try {
+        window.localStorage?.setItem(`${METADATA_PREFIX}${key}`, JSON.stringify(metadata))
+      } catch (error) {
+        console.warn(`[useKV] Failed to persist browser storage metadata for key "${key}"`, error)
+      }
+    },
+    removeMetadata: (key: string): void => {
+      try {
+        window.localStorage?.removeItem(`${METADATA_PREFIX}${key}`)
+      } catch (error) {
+        console.warn(`[useKV] Failed to remove browser storage metadata for key "${key}"`, error)
       }
     }
   }
@@ -84,6 +134,33 @@ const removeFromAdapter = (key: string): void => {
   }
 }
 
+const readMetadataFromAdapter = (key: string): StorageMetadata | undefined => {
+  try {
+    return storageAdapter.readMetadata(key)
+  } catch (error) {
+    console.warn(`[useKV] Storage adapter metadata read failed for key "${key}"`, error)
+    return undefined
+  }
+}
+
+const writeMetadataToAdapter = (key: string, metadata: StorageMetadata): void => {
+  try {
+    storageAdapter.writeMetadata(key, metadata)
+  } catch (error) {
+    console.warn(`[useKV] Storage adapter metadata write failed for key "${key}"`, error)
+  }
+}
+
+const removeMetadataFromAdapter = (key: string): void => {
+  try {
+    storageAdapter.removeMetadata(key)
+  } catch (error) {
+    console.warn(`[useKV] Storage adapter metadata remove failed for key "${key}"`, error)
+  }
+}
+
+const DEFAULT_METADATA: StorageMetadata = { lastUpdatedAt: 0, lastSyncedAt: null }
+
 export const setKVStorageAdapter = (adapter?: StorageAdapter): void => {
   storageAdapter = adapter ?? buildDefaultAdapter()
 }
@@ -105,6 +182,9 @@ export function useKV<T>(key: string, defaultValue: InitialValue<T>): [T, (value
   const defaultValueRef = useRef<T>(resolveInitial(defaultValue))
   const revisionRef = useRef(0)
   const hasLocalWriteRef = useRef(false)
+  const metadataRef = useRef<StorageMetadata>({ ...DEFAULT_METADATA })
+  const metadataInitializedRef = useRef(false)
+  const hasPendingSyncRef = useRef(false)
 
   if (keyRef.current !== key) {
     keyRef.current = key
@@ -112,11 +192,27 @@ export function useKV<T>(key: string, defaultValue: InitialValue<T>): [T, (value
     defaultValueRef.current = resolveInitial(defaultValue)
     revisionRef.current = 0
     hasLocalWriteRef.current = false
+    metadataRef.current = { ...DEFAULT_METADATA }
+    metadataInitializedRef.current = false
+    hasPendingSyncRef.current = false
   } else if (defaultSourceRef.current !== defaultValue) {
     defaultSourceRef.current = defaultValue
     const resolvedDefault = resolveInitial(defaultValue)
     if (!Object.is(defaultValueRef.current, resolvedDefault)) {
       defaultValueRef.current = resolvedDefault
+    }
+  }
+
+  if (!metadataInitializedRef.current) {
+    metadataInitializedRef.current = true
+    const storedMetadata = readMetadataFromAdapter(keyRef.current)
+    if (storedMetadata) {
+      metadataRef.current = storedMetadata
+      hasPendingSyncRef.current =
+        storedMetadata.lastSyncedAt === null || storedMetadata.lastSyncedAt < storedMetadata.lastUpdatedAt
+    } else {
+      metadataRef.current = { ...DEFAULT_METADATA }
+      hasPendingSyncRef.current = false
     }
   }
 
@@ -136,6 +232,44 @@ export function useKV<T>(key: string, defaultValue: InitialValue<T>): [T, (value
     return ensured
   })
 
+  const markPendingSync = (timestamp: number) => {
+    metadataRef.current = {
+      lastUpdatedAt: timestamp,
+      lastSyncedAt: metadataRef.current.lastSyncedAt
+    }
+    hasPendingSyncRef.current = true
+    writeMetadataToAdapter(keyRef.current, metadataRef.current)
+  }
+
+  const markSyncedIfCurrent = (timestamp: number) => {
+    if (metadataRef.current.lastUpdatedAt !== timestamp) {
+      return
+    }
+
+    metadataRef.current = {
+      lastUpdatedAt: timestamp,
+      lastSyncedAt: timestamp
+    }
+    hasPendingSyncRef.current = false
+    writeMetadataToAdapter(keyRef.current, metadataRef.current)
+  }
+
+  const pushToPersistence = (payload: T, timestamp: number): void => {
+    void savePersistedValue(keyRef.current, payload)
+      .then(() => {
+        markSyncedIfCurrent(timestamp)
+      })
+      .catch(error => {
+        console.warn(`[useKV] Failed to persist value for key "${keyRef.current}"`, error)
+      })
+  }
+
+  const attemptResync = (payload: T): void => {
+    const timestamp = metadataRef.current.lastUpdatedAt || Date.now()
+    markPendingSync(timestamp)
+    pushToPersistence(payload, timestamp)
+  }
+
   useEffect(() => {
     let cancelled = false
 
@@ -144,6 +278,7 @@ export function useKV<T>(key: string, defaultValue: InitialValue<T>): [T, (value
       const stored = await fetchPersistedValue<T>(key)
 
       const fallback = defaultValueRef.current
+      const pendingSync = hasPendingSyncRef.current
 
       if (stored === undefined || (stored === null && fallback !== null)) {
         const mirrored = readFromAdapter<T>(key)
@@ -152,18 +287,32 @@ export function useKV<T>(key: string, defaultValue: InitialValue<T>): [T, (value
           if (!cancelled) {
             setValue(mirrored)
           }
+          if (pendingSync) {
+            attemptResync(mirrored)
+          }
           return
         }
 
         if (!memoryStore.has(key)) {
           memoryStore.set(key, fallback)
-          await savePersistedValue(key, fallback)
           writeToAdapter(key, fallback)
+          const timestamp = Date.now()
+          markPendingSync(timestamp)
+          try {
+            await savePersistedValue(key, fallback)
+            markSyncedIfCurrent(timestamp)
+          } catch {
+            // Persistence layer will log failures; keep pending flag for retries.
+          }
           if (!cancelled) {
             setValue(fallback)
           }
         } else if (!cancelled) {
-          setValue(memoryStore.get(key) as T)
+          const existing = memoryStore.get(key) as T
+          setValue(existing)
+          if (pendingSync) {
+            attemptResync(existing)
+          }
         }
 
         if (stored === null && fallback !== null) {
@@ -176,12 +325,33 @@ export function useKV<T>(key: string, defaultValue: InitialValue<T>): [T, (value
         return
       }
 
+      if (pendingSync) {
+        const localValue = memoryStore.has(key)
+          ? (memoryStore.get(key) as T)
+          : readFromAdapter<T>(key)
+
+        if (localValue !== undefined) {
+          console.info(
+            `[useKV] Skipping server hydration for key "${key}" because local mirror has unsynced updates.`
+          )
+          attemptResync(localValue)
+          if (!cancelled) {
+            setValue(localValue)
+          }
+        }
+        return
+      }
+
       if ((hasLocalWriteRef.current && revisionRef.current >= loadRevision) || revisionRef.current !== loadRevision) {
         return
       }
 
       memoryStore.set(key, stored)
       writeToAdapter(key, stored)
+      const timestamp = Date.now()
+      metadataRef.current = { lastUpdatedAt: timestamp, lastSyncedAt: timestamp }
+      hasPendingSyncRef.current = false
+      writeMetadataToAdapter(key, metadataRef.current)
       if (!cancelled) {
         setValue(stored)
       }
@@ -201,8 +371,10 @@ export function useKV<T>(key: string, defaultValue: InitialValue<T>): [T, (value
         revisionRef.current += 1
         hasLocalWriteRef.current = true
         memoryStore.set(keyRef.current, resolved)
-        void savePersistedValue(keyRef.current, resolved)
         writeToAdapter(keyRef.current, resolved)
+        const timestamp = Date.now()
+        markPendingSync(timestamp)
+        pushToPersistence(resolved, timestamp)
         return resolved
       })
     },
@@ -215,6 +387,7 @@ export function useKV<T>(key: string, defaultValue: InitialValue<T>): [T, (value
 export function clearKVStore(): void {
   for (const key of memoryStore.keys()) {
     removeFromAdapter(key)
+    removeMetadataFromAdapter(key)
   }
   memoryStore.clear()
   // Optionally clear server-side store by removing known keys

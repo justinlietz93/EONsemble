@@ -96,6 +96,7 @@ describe('useKV', () => {
     const storageState: Record<string, Entry[]> = {
       'knowledge-base': [{ id: 'mirror-entry' }]
     }
+    const metadataState: Record<string, { lastUpdatedAt: number; lastSyncedAt: number | null }> = {}
 
     setKVStorageAdapter({
       read: (key) => storageState[key] as Entry[] | undefined,
@@ -104,6 +105,13 @@ describe('useKV', () => {
       },
       remove: (key) => {
         delete storageState[key]
+      },
+      readMetadata: (key) => metadataState[key],
+      writeMetadata: (key, metadata) => {
+        metadataState[key] = metadata
+      },
+      removeMetadata: (key) => {
+        delete metadataState[key]
       }
     })
 
@@ -124,5 +132,51 @@ describe('useKV', () => {
       { id: 'mirror-entry' },
       { id: 'added-entry' }
     ])
+  })
+
+  it('keeps mirrored values when pending sync metadata exists and hydration returns an empty array', async () => {
+    type Entry = { id: string }
+
+    const storageState: Record<string, Entry[]> = {
+      'knowledge-base': [{ id: 'mirror-entry' }]
+    }
+    const metadataState: Record<string, { lastUpdatedAt: number; lastSyncedAt: number | null }> = {
+      'knowledge-base': {
+        lastUpdatedAt: Date.now(),
+        lastSyncedAt: null
+      }
+    }
+
+    setKVStorageAdapter({
+      read: (key) => storageState[key] as Entry[] | undefined,
+      write: (key, value) => {
+        storageState[key] = value as Entry[]
+      },
+      remove: (key) => {
+        delete storageState[key]
+      },
+      readMetadata: (key) => metadataState[key],
+      writeMetadata: (key, metadata) => {
+        metadataState[key] = metadata
+      },
+      removeMetadata: (key) => {
+        delete metadataState[key]
+      }
+    })
+
+    fetchPersistedValue.mockResolvedValueOnce([])
+    savePersistedValue.mockResolvedValueOnce()
+
+    const { result } = renderHook(() => useKV<Entry[]>('knowledge-base', () => []))
+
+    await waitFor(() => {
+      expect(result.current[0]).toEqual([{ id: 'mirror-entry' }])
+    })
+
+    await waitFor(() => {
+      expect(savePersistedValue).toHaveBeenCalledWith('knowledge-base', [
+        { id: 'mirror-entry' }
+      ])
+    })
   })
 })

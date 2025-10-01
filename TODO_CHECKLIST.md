@@ -54,6 +54,23 @@
   serialization errors. Will add explicit warnings + tests to ensure large knowledge uploads degrade gracefully rather than
   throwing.
 
+### 2025-09-29 — Mirror Persistence Overwrites After Unsynced Writes
+- **Context**: Live repro shows that when the persistence API never stores the most recent knowledge upload (e.g., backend offline), the browser mirror seeds the UI correctly on reload but gets clobbered moments later once hydration returns an empty array. We need a guard that recognises unsynced local writes and resists stale server payloads until reconciliation succeeds.
+- **Options Considered**:
+  1. Track per-key sync metadata (last updated vs. last persisted timestamps) inside the storage adapter and skip server hydration when the mirror indicates pending writes.
+  2. Compare payload hashes/lengths between mirror and server and keep whichever contains more entries for array-valued keys.
+  3. Queue writes through a dedicated persistence worker that retries until the backend acknowledges the payload, keeping the worker authoritative.
+  4. Replace the adapter with IndexedDB and transactional writes so failed PUTs never leave the browser in an inconsistent state.
+  5. Prompt the user whenever hydration would drop entries, letting them decide whether to keep the mirror or accept the server payload.
+- **Evaluation** (ranked by relevance & likelihood of success):
+  1. **Option 1** — Minimal UI impact, deterministic, keeps logic centralised in `useKV`. *Rank: 1*.
+  2. **Option 2** — Works for arrays but brittle for arbitrary value shapes. *Rank: 2*.
+  3. **Option 3** — Adds resilience but introduces background complexity for every key. *Rank: 3*.
+  4. **Option 5** — Transparent but noisy, adds friction to common flows. *Rank: 4*.
+  5. **Option 4** — Heavy migration with little benefit beyond current need. *Rank: 5*.
+- **Selected Approach**: Option 1 — Persist sync metadata per key, gate hydration when unsynced writes exist, and auto-resubmit the latest mirror payload to the backend.
+- **Self-Critique**: Metadata tracking increases adapter complexity; must document the format and guard against JSON migration issues so existing stored values remain readable.
+
 ### 2025-09-29 — Hydration Race & Remote Runtime Validation
 - **Context**: Despite prior guards in `useKV`, knowledge uploads still disappear after switching tabs whenever the persistence
   hydration resolves after a local write. Remote runtime inputs
@@ -132,10 +149,10 @@
        than crashes.
     4. Documentation (runbook or README) explains the fallback behaviour and outlines storage limits / troubleshooting.
   - Next Steps:
-    1. Extend `useKV` with read/write helpers for the `localStorage` mirror, including graceful error handling.
-      2. Add Vitest coverage demonstrating hydration from the mirror when persistence fetches fail.
-      3. Update `app.knowledge-persistence.test.tsx` with a regression covering offline tab switching.
-      4. Amend documentation with a succinct note on the mirror fallback and storage constraints.
+    1. ✅ Persist per-key sync metadata (last update + last successful persist) alongside the mirror and skip stale server hydration when pending writes exist. *(Completed 2025-09-29 via `useKV` metadata refs and adapter updates.)*
+    2. ✅ Retry persistence writes automatically when hydration reveals the backend is missing the mirror payload, with diagnostic logging for repeated failures. *(Completed 2025-09-29 by invoking `pushToPersistence` during hydration when pending sync metadata is present.)*
+    3. ✅ Expand the regression suite with a case where the server returns an empty array while the mirror retains entries, ensuring the UI keeps the mirror data. *(Completed 2025-09-29 through new hook + component tests.)*
+    4. ✅ Amend documentation with the sync-metadata behaviour, storage format, and recovery commands. *(Completed 2025-09-29 in `docs/runbooks/memory-restore.md`.)*
   - Strict Judge Checklist: Confirm no additional regressions in agentic operations (`AutonomousEngine` single + continuous run)
     after the persistence changes.
   - Implementation Options Review (2025-09-29):
@@ -149,11 +166,8 @@
     - Selected: Option 1 — Add an internal adapter abstraction but default it to a `localStorage` implementation, enabling
       dependency injection in tests without rewriting all consumers.
     - Self-Critique: Adapter pattern adds indirection; must keep API minimal (`read`, `write`, `remove`) to avoid complexity.
-  - Status Notes (2025-09-29): Implemented the adapter-backed mirror in `useKV`, added mirror hydration coverage in
-    `tests/hooks/useKV.test.tsx` and the app-level persistence suite, and documented the workflow in the memory restore runbook.
-    Confirmed agentic entry points remain healthy via `tests/components/screens.test.tsx`. *Strict Judge Review*: Validated
-    mirror resilience by unmounting and remounting the app with persistence offline — entries stayed intact thanks to the
-    `localStorage` seed, and Vitest now fails if the adapter path regresses.
+  - Status Notes (2025-09-29): Reopened after observing that server hydration overwrites unsynced mirror data when the backend misses recent uploads. Metadata guard + retry loop pending. Tests need to reflect the stale-server scenario. Strict Judge review deferred until the metadata patch lands and agentic entry points are retested.
+  - Status Notes (2025-09-29 — PM): Implemented the sync-metadata guard, automatic resubmission of mirror payloads, and adapter helpers for metadata storage. Added targeted regressions (`tests/hooks/useKV.test.tsx`, `tests/components/app.knowledge-sync.test.tsx`) plus reran the legacy persistence suite and screen smoke tests. Strict Judge Review: Verified agentic operations via `npx vitest run tests/components/screens.test.tsx` and ensured metadata-protected hydrations leave knowledge intact while reissuing persistence PUTs.
 - [DONE] Document and reproduce the hydration race where late-arriving persistence reads overwrite fresh local writes.
   - Decision Log (2025-09-29):
     1. Extend the existing RTL suite with a controllable fetch promise that resolves after a local corpus upload.
