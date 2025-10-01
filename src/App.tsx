@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef } from 'react'
-import { useKV } from '@/hooks/useKV'
+import { useKV, type UseKVOptions } from '@/hooks/useKV'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Badge } from '@/components/ui/badge'
 import { Network, Target, Play, ClockCounterClockwise, Gear } from '@phosphor-icons/react'
@@ -54,12 +54,36 @@ export interface KnowledgeEntry {
   timestamp: string
 }
 
+const shouldAcceptKnowledgeHydration: UseKVOptions<KnowledgeEntry[]>['shouldAcceptHydration'] = (
+  incoming,
+  { localValue }
+) => {
+  if (Array.isArray(localValue) && localValue.length > 0 && Array.isArray(incoming)) {
+    if (incoming.length < localValue.length) {
+      console.warn(
+        '[App] Skipping knowledge hydration because incoming payload is smaller than local mirror.',
+        {
+          localCount: localValue.length,
+          incomingCount: incoming.length
+        }
+      )
+      return false
+    }
+  }
+
+  return true
+}
+
 function App() {
   const [activeTab, setActiveTab] = useKV<string>('active-tab', resolveInitialActiveTab)
   const [goals, setGoals] = useKV<PhysicsGoal[]>('physics-goals', [])
   const [activeGoal, setActiveGoal] = useKV<string | null>('active-goal', null)
   const [derivationHistory, setDerivationHistory] = useKV<AgentResponse[]>('derivation-history', [])
-  const [knowledgeBase, setKnowledgeBase] = useKV<KnowledgeEntry[]>('knowledge-base', [])
+  const [knowledgeBase, setKnowledgeBase] = useKV<KnowledgeEntry[]>(
+    'knowledge-base',
+    [],
+    { shouldAcceptHydration: shouldAcceptKnowledgeHydration }
+  )
 
   const currentGoal = goals?.find(g => g.id === activeGoal)
   const hasActiveGoal = Boolean(currentGoal)

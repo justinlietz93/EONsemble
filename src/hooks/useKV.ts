@@ -17,6 +17,17 @@ type StorageMetadata = {
   lastSyncedAt: number | null
 }
 
+export type UseKVHydrationContext<T> = {
+  key: string
+  localValue: T | undefined
+  metadata: StorageMetadata
+  pendingSync: boolean
+}
+
+export type UseKVOptions<T> = {
+  shouldAcceptHydration?: (incoming: T, context: UseKVHydrationContext<T>) => boolean
+}
+
 type StorageAdapter = {
   read<T>(key: string): T | undefined
   write<T>(key: string, value: T): void
@@ -176,7 +187,11 @@ const ensureMemoryValue = <T,>(key: string, fallback: T): T => {
   return fallback
 }
 
-export function useKV<T>(key: string, defaultValue: InitialValue<T>): [T, (value: Updater<T>) => void] {
+export function useKV<T>(
+  key: string,
+  defaultValue: InitialValue<T>,
+  options?: UseKVOptions<T>
+): [T, (value: Updater<T>) => void] {
   const keyRef = useRef(key)
   const defaultSourceRef = useRef<InitialValue<T>>(defaultValue)
   const defaultValueRef = useRef<T>(resolveInitial(defaultValue))
@@ -185,6 +200,7 @@ export function useKV<T>(key: string, defaultValue: InitialValue<T>): [T, (value
   const metadataRef = useRef<StorageMetadata>({ ...DEFAULT_METADATA })
   const metadataInitializedRef = useRef(false)
   const hasPendingSyncRef = useRef(false)
+  const optionsRef = useRef<UseKVOptions<T> | undefined>(options)
 
   if (keyRef.current !== key) {
     keyRef.current = key
@@ -195,12 +211,17 @@ export function useKV<T>(key: string, defaultValue: InitialValue<T>): [T, (value
     metadataRef.current = { ...DEFAULT_METADATA }
     metadataInitializedRef.current = false
     hasPendingSyncRef.current = false
+    optionsRef.current = options
   } else if (defaultSourceRef.current !== defaultValue) {
     defaultSourceRef.current = defaultValue
     const resolvedDefault = resolveInitial(defaultValue)
     if (!Object.is(defaultValueRef.current, resolvedDefault)) {
       defaultValueRef.current = resolvedDefault
     }
+  }
+
+  if (optionsRef.current !== options) {
+    optionsRef.current = options
   }
 
   if (!metadataInitializedRef.current) {
@@ -343,6 +364,34 @@ export function useKV<T>(key: string, defaultValue: InitialValue<T>): [T, (value
       }
 
       if ((hasLocalWriteRef.current && revisionRef.current >= loadRevision) || revisionRef.current !== loadRevision) {
+        return
+      }
+
+      const localValue = memoryStore.has(key)
+        ? (memoryStore.get(key) as T)
+        : readFromAdapter<T>(key)
+
+      const shouldAcceptHydration = optionsRef.current?.shouldAcceptHydration
+        ? optionsRef.current.shouldAcceptHydration(stored, {
+            key,
+            localValue,
+            metadata: metadataRef.current,
+            pendingSync
+          })
+        : true
+
+      if (!shouldAcceptHydration) {
+        console.warn(
+          `[useKV] Rejected hydration for key "${key}" because the incoming payload failed the acceptance predicate.`
+        )
+
+        if (localValue !== undefined) {
+          attemptResync(localValue)
+          if (!cancelled) {
+            setValue(localValue)
+          }
+        }
+
         return
       }
 

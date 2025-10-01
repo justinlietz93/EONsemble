@@ -97,6 +97,13 @@ re-initialization, and collaboration history replay.
   sync. Inspect `tests/hooks/useKV.test.tsx` (`keeps mirrored values when pending
   sync metadata exists...`) or `tests/components/app.knowledge-sync.test.tsx` for
   regression coverage.
+- Evening 2025-09-29: `useKV` exposes an optional hydration acceptance predicate
+  so domain-specific stores (e.g., the knowledge base) can reject clearly
+  regressive payloads even when metadata reports everything in sync. When the
+  predicate vetoes a payload, the hook retains the mirror value and replays it to
+  the server. See `tests/hooks/useKV.test.tsx` (`rejects shrinkage-only hydration`)
+  once added, or the knowledge base configuration in `src/App.tsx` for a working
+  example.
 - When investigating suspected regressions, reproduce the offline scenario by
   mocking `fetchPersistedValue` to resolve `undefined` and verify that
   previously added entries remain visible.

@@ -165,7 +165,7 @@ describe('useKV', () => {
     })
 
     fetchPersistedValue.mockResolvedValueOnce([])
-    savePersistedValue.mockResolvedValueOnce()
+    savePersistedValue.mockResolvedValue()
 
     const { result } = renderHook(() => useKV<Entry[]>('knowledge-base', () => []))
 
@@ -178,5 +178,71 @@ describe('useKV', () => {
         { id: 'mirror-entry' }
       ])
     })
+  })
+
+  it('rejects shrinkage-only hydration when predicate vetoes the incoming payload', async () => {
+    type Entry = { id: string }
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    const storageState: Record<string, Entry[]> = {
+      'knowledge-base': [
+        { id: 'mirror-entry' },
+        { id: 'another-entry' }
+      ]
+    }
+    const now = Date.now()
+    const metadataState: Record<string, { lastUpdatedAt: number; lastSyncedAt: number | null }> = {
+      'knowledge-base': {
+        lastUpdatedAt: now,
+        lastSyncedAt: now
+      }
+    }
+
+    setKVStorageAdapter({
+      read: (key) => storageState[key] as Entry[] | undefined,
+      write: (key, value) => {
+        storageState[key] = value as Entry[]
+      },
+      remove: (key) => {
+        delete storageState[key]
+      },
+      readMetadata: (key) => metadataState[key],
+      writeMetadata: (key, metadata) => {
+        metadataState[key] = metadata
+      },
+      removeMetadata: (key) => {
+        delete metadataState[key]
+      }
+    })
+
+    fetchPersistedValue.mockResolvedValueOnce([])
+    savePersistedValue.mockResolvedValue()
+
+    const { result } = renderHook(() =>
+      useKV<Entry[]>(
+        'knowledge-base',
+        () => [],
+        {
+          shouldAcceptHydration: (incoming, { localValue }) => {
+            if (Array.isArray(localValue) && localValue.length > 0 && Array.isArray(incoming)) {
+              return incoming.length >= localValue.length
+            }
+
+            return true
+          }
+        }
+      )
+    )
+
+    await waitFor(() => {
+      expect(result.current[0]).toEqual(storageState['knowledge-base'])
+    })
+
+    await waitFor(() => {
+      expect(savePersistedValue).toHaveBeenCalledWith('knowledge-base', storageState['knowledge-base'])
+    })
+
+    warnSpy.mockRestore()
   })
 })

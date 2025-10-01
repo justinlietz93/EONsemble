@@ -31,6 +31,32 @@
   Mitigate by wiring the new instrumentation into session diagnostics so manual repros emit actionable traces before attempting
   riskier storage changes.
 
+### 2025-09-29 — Server Hydration Returns Empty Arrays After Successful Sync
+- **Context**: Manual QA shows knowledge entries disappearing immediately after navigation even when local mirrors contain the
+  uploaded data and persistence writes resolve successfully. The current guard only skips hydration when pending sync metadata
+  exists, so an unexpected empty array from the backend can still overwrite the mirror and memory store. We need an additional
+  acceptance heuristic that treats clearly regressive hydrations (e.g., payload shrinkage) as stale and replays the mirror
+  payload back to the server.
+- **Options Considered**:
+  1. Extend `useKV` with a `shouldAcceptHydration` predicate so consumers can veto specific payloads (e.g., shrinkage beyond a
+     tolerance) and trigger a resync.
+  2. Implement a generic payload digest inside the metadata record (length + hash) and compare digests before accepting
+     hydration.
+  3. Force a secondary confirmation fetch before mutating state; only accept hydration when two consecutive responses match.
+  4. Wrap knowledge-specific logic around the hook (e.g., `useKnowledgeStore`) that compares incoming payload size against a
+     session snapshot and restores when it shrinks unexpectedly.
+  5. Defer all hydrations until a human confirms the payload via UI prompt whenever it would drop entries.
+- **Evaluation** (ranked by relevance & likelihood of success):
+  1. **Option 1** — Minimal API surface, empowers consumers with domain heuristics, easy to test. *Rank: 1*.
+  2. **Option 2** — Helpful for detecting divergence but adds metadata churn and hash maintenance. *Rank: 2*.
+  3. **Option 4** — Keeps hook untouched but fragments logic and duplicates persistence wiring. *Rank: 3*.
+  4. **Option 3** — Doubles network load and delays UI updates without guaranteeing fidelity. *Rank: 4*.
+  5. **Option 5** — Blocks UX behind prompts and risks decision fatigue. *Rank: 5*.
+- **Selected Approach**: Option 1 — add an optional hydration acceptance predicate to `useKV`, apply a shrinkage-aware guard for
+  knowledge arrays, and auto-resubmit the preserved mirror payload when rejected.
+- **Self-Critique**: Consumer-provided predicates must stay side-effect free; will ensure the hook handles logging/resync to
+  avoid inconsistent behaviour across call sites.
+
 ### 2025-09-29 — Knowledge Base Still Resets After Tab Switch
 - **Context**: Despite the hydration guard and regression suites, the user still sees the knowledge counter drop to zero after
   corpus uploads whenever they navigate away and back. The checklist must capture the reopened failure so we can treat the prior
@@ -184,6 +210,7 @@
     4. ✅ Amend documentation with the sync-metadata behaviour, storage format, and recovery commands. *(Completed 2025-09-29 in `docs/runbooks/memory-restore.md`.)*
     5. ✅ Build a high-fidelity regression harness that reproduces the live tab-switch flow (mount/unmount + delayed hydration) to confirm the guard covers real-world timing. *(2025-09-29: Added cross-tab deferred upload regression in `tests/components/app.knowledge-persistence.test.tsx`.)*
     6. ✅ Thread structured `knowledge-base` state change logs into `useSessionDiagnostics` to capture future regressions with contextual evidence. *(2025-09-29: Added knowledge delta/sample logging with expanded hook tests.)*
+    7. [DONE] Introduce shrinkage-aware hydration guards so empty backend payloads cannot overwrite richer mirror data when metadata claims the writes succeeded. *(2025-09-29 Evening: Added `shouldAcceptHydration` predicate support to `useKV`, wired knowledge-base guard in `App.tsx`, and extended hook regressions with a shrinkage veto case.)*
   - Strict Judge Checklist: Confirm no additional regressions in agentic operations (`AutonomousEngine` single + continuous run)
     after the persistence changes.
   - Implementation Options Review (2025-09-29):
@@ -309,6 +336,8 @@
   - Self-Critique: The mocking required to pause `FileReader` may overfit to test harness behaviour; I will pair it with targeted logging to ensure we do not chase phantom races.
   - Status Notes (2025-09-29): Added `retains corpus uploads even when file processing completes after leaving the tab`, which manually defers the `FileReader` resolution until after navigation. The regression passes, signalling the live failure stems from a different condition (likely outside our current mocks). Next step: capture lifecycle logging to spot cleanup races.
   - Status Notes (2025-09-29, later): Instrumented `CorpusUpload` with mount/unmount diagnostics and guarded file-state updates so we can detect uploads finishing after the component unmounts. Vitest output now reports when knowledge writes happen post-unmount, confirming the timing window exists and giving us breadcrumbs for the root cause analysis.
+  - Status Notes (2025-09-29 — Evening): Manual repro shows backend hydrations occasionally return empty arrays immediately after a successful upload. Pending shrinkage guard (`useKV` predicate) is expected to keep the richer mirror data while pushing a restorative write back to the server. Strict Judge check will rerun agentic operation tests once the guard lands.
+  - Status Notes (2025-09-29 — Late Evening): Implemented the shrinkage guard and confirmed `useKV` rejects smaller server payloads while replaying the mirror state. Vitest suites (`tests/hooks/useKV.test.tsx`, `tests/components/app.knowledge-persistence.test.tsx`, `tests/components/screens.test.tsx`) all pass, covering both the guard and agentic operations.
 - [NOT STARTED] Patch the root cause once identified, ensuring no knowledge loss across manual uploads, agent writes, and goal resets.
   - Acceptance: Live manual QA documented plus passing automated regressions covering the new timing scenario.
   - Follow-up: Update documentation/runbooks once the fix lands.
