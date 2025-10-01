@@ -2,6 +2,34 @@
 
 ## Decision Log
 
+### 2025-09-29 — Dual-layer browser mirror for resilient knowledge persistence
+- **Context**: Despite the existing `localStorage` mirror and snapshot guard, live repros still show the knowledge counter
+  dropping to zero after navigating away from the Knowledge tab. Session traces reveal that the regression correlates with
+  moments where `localStorage` lookups briefly return `null`, likely due to browser eviction or transient access failures in
+  certain environments. The checklist needs a plan to guarantee a second, fast mirror so UI state survives even if the primary
+  storage hiccups.
+- **Options Considered**:
+  1. Extend `useKV` to maintain a sessionStorage shadow copy alongside the localStorage mirror, hydrating from whichever source
+     responds first and reconciling the two stores after writes.
+  2. Keep `useKV` unchanged and build a knowledge-specific fallback hook that persists snapshots to sessionStorage on every
+     update, hydrating the array before server reads (essentially embedding the guard logic directly in App).
+  3. Replace the mirror with an IndexedDB persistence layer that offers larger quotas and transactional reads even during
+     localStorage churn.
+  4. Force a blocking re-fetch from the persistence API whenever the mirror returns `null`, relying on remote state as the
+     source of truth.
+  5. Surface a manual "Restore knowledge" action in the UI that replays the last export file if the array empties unexpectedly.
+- **Evaluation** (ranked by relevance & likelihood of success):
+  1. **Option 1** — Minimal scope, reuses existing hook boundaries, provides redundant storage without heavy refactors. *Rank: 1*.
+  2. **Option 2** — Targeted but duplicates logic already centralised in `useKV`, increasing maintenance burden. *Rank: 2*.
+  3. **Option 3** — Robust long-term, yet significantly more complex and overkill for the immediate regression. *Rank: 3*.
+  4. **Option 4** — Depends on remote availability (which may be offline) and delays rendering, hurting UX. *Rank: 4*.
+  5. **Option 5** — Manual recovery only, fails the requirement for automatic resilience. *Rank: 5*.
+- **Selected Approach**: Option 1 — implement a dual-layer adapter in `useKV` that reads from sessionStorage when
+  localStorage misses, writes to both stores atomically, and reconciles pending metadata so either store can reseed state.
+- **Self-Critique**: Doubling storage writes increases quota usage and requires careful cleanup to prevent stale shadows. I
+  will cap sessionStorage usage to knowledge-sized payloads, add diagnostics for serialization failures, and document storage
+  limits so QA can monitor growth.
+
 ### 2025-09-29 — Preserve knowledge snapshots across remounts and session resets
 - **Context**: Manual repros still reveal that after uploading corpus files the knowledge counter occasionally drops to zero when
   the app remounts (e.g., dev StrictMode double mounts, hot reloads, or browser tab sleep). The in-memory snapshot guard covers
@@ -365,6 +393,12 @@
     7. [DONE] Introduce shrinkage-aware hydration guards so empty backend payloads cannot overwrite richer mirror data when metadata claims the writes succeeded. *(2025-09-29 Evening: Added `shouldAcceptHydration` predicate support to `useKV`, wired knowledge-base guard in `App.tsx`, and extended hook regressions with a shrinkage veto case.)*
     8. ✅ Ship a snapshot guard that restores the last non-empty knowledge payload when the rendered array unexpectedly clears after navigation. *(2025-09-29: Added `useKnowledgeSnapshotGuard`, wired it through `App.tsx`, and validated with focused hook tests.)*
     9. [DONE] Persist the guard snapshot to `sessionStorage` so remounts restore knowledge before the persistence API responds. *(2025-09-29 Evening: Updated `useKnowledgeSnapshotGuard` with a sessionStorage fallback, added guard + app wiring, and covered the behaviour with new hook tests.)*
+    10. [STARTED] Add a sessionStorage shadow mirror to `useKV` so knowledge survives transient localStorage misses and cross-tab races.
+        - Acceptance Criteria:
+          1. `useKV` hydrates from sessionStorage when localStorage is empty but a shadow copy exists, without triggering a default reset.
+          2. Writes update both storage layers (best-effort) while keeping metadata parity so pending sync flags stay accurate.
+          3. Diagnostics warn when either storage layer rejects serialization so QA can correlate quota or privacy-mode failures.
+          4. Tests cover dual-source hydration, sessionStorage-only fallbacks, and ensure intentional clears purge both mirrors.
   - Strict Judge Checklist: Confirm no additional regressions in agentic operations (`AutonomousEngine` single + continuous run)
     after the persistence changes. *(2025-09-30: Verified by rerunning `npm run test -- --run tests/components/screens.test.tsx`
     following the replay updates.)*
@@ -386,6 +420,7 @@
   - Status Notes (2025-09-29 — Regression Harness): Added `retains knowledge after navigating across collaboration and settings tabs during deferred uploads` to `tests/components/app.knowledge-persistence.test.tsx`, covering multi-tab unmount/mount cycles with delayed FileReader completion. The test currently passes, indicating the live failure likely stems from an environment-specific condition not yet modelled.
   - Status Notes (2025-09-29 — Snapshot Guard): Implemented the in-app snapshot restoration hook with contextual diagnostics. Hook-level tests prove drop-to-zero states auto-heal while allowing explicit clears when flagged. Pending live validation before downgrading from `[RETRYING]`.
   - Status Notes (2025-09-29 — Session Snapshot Persistence): Session storage fallback implemented; `useKnowledgeSnapshotGuard` now persists the last non-empty payload and clears it when emptiness is intentional. Verified via `npm test -- --run tests/hooks/useKnowledgeSnapshotGuard.test.tsx` and `npm test -- --run tests/components/app.knowledge-persistence.test.tsx`.
+  - Status Notes (2025-09-29 — Late Night Mirror Plan): New telemetry shows sporadic `localStorage` null hydrations during tab switches. Kicked off the sessionStorage shadow work inside `useKV`; diagnostics + regression tests pending before flipping this item to `[DONE]`.
 - [DONE] Document and reproduce the hydration race where late-arriving persistence reads overwrite fresh local writes.
   - Decision Log (2025-09-29):
     1. Extend the existing RTL suite with a controllable fetch promise that resolves after a local corpus upload.

@@ -78,6 +78,9 @@ describe('useKV', () => {
     if (typeof window !== 'undefined' && window.localStorage) {
       window.localStorage.clear()
     }
+    if (typeof window !== 'undefined' && window.sessionStorage) {
+      window.sessionStorage.clear()
+    }
   })
 
   it('retains local updates when persistence hydration resolves undefined after the update', async () => {
@@ -147,6 +150,49 @@ describe('useKV', () => {
     })
   })
 
+  it('hydrates from sessionStorage when localStorage is empty', async () => {
+    type Entry = { id: string }
+
+    fetchPersistedValue.mockResolvedValueOnce(undefined)
+    savePersistedValue.mockResolvedValue()
+
+    window.localStorage.removeItem('eon.kv.knowledge-base')
+    window.sessionStorage.setItem('eon.kv.knowledge-base', JSON.stringify([{ id: 'session-entry' }]))
+
+    const { result } = renderHook(() => useKV<Entry[]>('knowledge-base', () => []))
+
+    await waitFor(() => {
+      expect(result.current[0]).toEqual([{ id: 'session-entry' }])
+    })
+
+    expect(window.localStorage.getItem('eon.kv.knowledge-base')).not.toBeNull()
+  })
+
+  it('writes mirrored values and metadata to localStorage and sessionStorage', async () => {
+    type Entry = { id: string }
+
+    fetchPersistedValue.mockResolvedValueOnce(undefined)
+    savePersistedValue.mockResolvedValue()
+
+    const { result } = renderHook(() => useKV<Entry[]>('knowledge-base', () => []))
+
+    await act(async () => {
+      result.current[1]([{ id: 'mirror-entry' }])
+    })
+
+    await waitFor(() => {
+      expect(result.current[0]).toEqual([{ id: 'mirror-entry' }])
+    })
+
+    const localData = window.localStorage.getItem('eon.kv.knowledge-base')
+    const sessionData = window.sessionStorage.getItem('eon.kv.knowledge-base')
+    expect(localData).toContain('mirror-entry')
+    expect(sessionData).toContain('mirror-entry')
+
+    expect(window.localStorage.getItem('eon.kv.meta.knowledge-base')).not.toBeNull()
+    expect(window.sessionStorage.getItem('eon.kv.meta.knowledge-base')).not.toBeNull()
+  })
+
   it('hydrates from the storage adapter when persistence is unavailable', async () => {
     type Entry = { id: string }
 
@@ -189,6 +235,32 @@ describe('useKV', () => {
       { id: 'mirror-entry' },
       { id: 'added-entry' }
     ])
+  })
+
+  it('clears both browser mirrors when the KV store is cleared', async () => {
+    type Entry = { id: string }
+
+    fetchPersistedValue.mockResolvedValueOnce(undefined)
+    savePersistedValue.mockResolvedValue()
+
+    const { result } = renderHook(() => useKV<Entry[]>('knowledge-base', () => []))
+
+    await act(async () => {
+      result.current[1]([{ id: 'remove-entry' }])
+    })
+
+    await waitFor(() => {
+      expect(result.current[0]).toEqual([{ id: 'remove-entry' }])
+    })
+
+    act(() => {
+      clearKVStore()
+    })
+
+    expect(window.localStorage.getItem('eon.kv.knowledge-base')).toBeNull()
+    expect(window.localStorage.getItem('eon.kv.meta.knowledge-base')).toBeNull()
+    expect(window.sessionStorage.getItem('eon.kv.knowledge-base')).toBeNull()
+    expect(window.sessionStorage.getItem('eon.kv.meta.knowledge-base')).toBeNull()
   })
 
   it('syncs updates from other tabs without issuing duplicate persistence writes', async () => {

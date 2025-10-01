@@ -150,6 +150,15 @@ re-initialization, and collaboration history replay.
   `localStorage` mirror repopulates knowledge entries while the persistence API
   stays offline. To verify the metadata guard against stale hydration, execute
   `npx vitest run tests/components/app.knowledge-sync.test.tsx`.
+- Late 2025-09-29 (mirror hardening): The `useKV` adapter now writes knowledge
+  payloads and sync metadata to both `localStorage` and `sessionStorage`. If the
+  primary mirror returns `null` during tab switches (privacy mode, transient
+  quota errors), the hook hydrates from the session shadow and backfills the
+  primary store. Run
+  `npx vitest run tests/hooks/useKV.test.tsx -t "hydrates from sessionStorage when localStorage is empty"`
+  and `-t "writes mirrored values and metadata to localStorage and sessionStorage"`
+  to confirm the dual-layer behaviour, and `-t "clears both browser mirrors when the KV store is cleared"`
+  to ensure cleanup purges both caches.
 - Cross-tab sessions now subscribe to `storage` events so updates in one
   browser tab refresh the others without requiring manual reloads. Validate the
   listener with

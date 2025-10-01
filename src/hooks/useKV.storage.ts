@@ -32,6 +32,32 @@ const buildDataKey = (key: string): string => `${STORAGE_PREFIX}${key}`
 const buildChunkKey = (key: string, index: number): string =>
   `${CHUNK_PREFIX}${key}${CHUNK_DELIMITER}${index}`
 
+const getLocalStorage = (): Storage | null => {
+  if (typeof window === 'undefined') {
+    return null
+  }
+
+  try {
+    return window.localStorage ?? null
+  } catch (error) {
+    console.warn('[useKV] Unable to access localStorage', error)
+    return null
+  }
+}
+
+const getSessionStorage = (): Storage | null => {
+  if (typeof window === 'undefined') {
+    return null
+  }
+
+  try {
+    return window.sessionStorage ?? null
+  } catch (error) {
+    console.warn('[useKV] Unable to access sessionStorage', error)
+    return null
+  }
+}
+
 const tryParseJSON = <T>(value: string): T | null => {
   try {
     return JSON.parse(value) as T
@@ -79,21 +105,34 @@ const readChunkedValue = <T,>(storage: Storage, key: string, manifest: ChunkMani
   return parsed ?? undefined
 }
 
-const getStoredChunkManifest = (storage: Storage, key: string): ChunkManifest | null => {
-  const raw = storage.getItem(buildDataKey(key))
-  if (!raw) {
+const getStoredChunkManifest = (storage: Storage | null, key: string): ChunkManifest | null => {
+  if (!storage) {
     return null
   }
 
-  const parsed = tryParseJSON<unknown>(raw)
-  if (!parsed || !isChunkManifest(parsed)) {
+  try {
+    const raw = storage.getItem(buildDataKey(key))
+    if (!raw) {
+      return null
+    }
+
+    const parsed = tryParseJSON<unknown>(raw)
+    if (!parsed || !isChunkManifest(parsed)) {
+      return null
+    }
+
+    return parsed
+  } catch (error) {
+    console.warn(`[useKV] Failed to read chunk manifest for key "${key}"`, error)
     return null
   }
-
-  return parsed
 }
 
-const removeChunkEntries = (storage: Storage, key: string, manifest?: ChunkManifest | null): void => {
+const removeChunkEntries = (storage: Storage | null, key: string, manifest?: ChunkManifest | null): void => {
+  if (!storage) {
+    return
+  }
+
   const descriptor = manifest ?? getStoredChunkManifest(storage, key)
   if (!descriptor) {
     return
@@ -145,6 +184,133 @@ const writeChunkedValue = <T,>(storage: Storage, key: string, serialized: string
   }
 }
 
+const readValueFromStorage = <T,>(storage: Storage | null, key: string): T | undefined => {
+  if (!storage) {
+    return undefined
+  }
+
+  try {
+    const raw = storage.getItem(buildDataKey(key))
+    if (raw === null || raw === undefined) {
+      return undefined
+    }
+
+    const parsed = tryParseJSON<unknown>(raw)
+    if (parsed && isChunkManifest(parsed)) {
+      return readChunkedValue<T>(storage, key, parsed) ?? undefined
+    }
+
+    return (parsed as T) ?? undefined
+  } catch (error) {
+    console.warn(`[useKV] Failed to read browser storage value for key "${key}"`, error)
+    return undefined
+  }
+}
+
+const persistSerializedValue = (
+  storage: Storage | null,
+  key: string,
+  serialized: string,
+  label: 'localStorage' | 'sessionStorage'
+): void => {
+  if (!storage) {
+    return
+  }
+
+  try {
+    const manifest = getStoredChunkManifest(storage, key)
+    removeChunkEntries(storage, key, manifest)
+
+    if (serialized.length > CHUNK_SIZE_LIMIT) {
+      writeChunkedValue(storage, key, serialized)
+      return
+    }
+
+    storage.setItem(buildDataKey(key), serialized)
+  } catch (error) {
+    console.warn(`[useKV] Failed to persist browser storage value for key "${key}" in ${label}`, error)
+  }
+}
+
+const removeValueFromStorage = (
+  storage: Storage | null,
+  key: string,
+  label: 'localStorage' | 'sessionStorage'
+): void => {
+  if (!storage) {
+    return
+  }
+
+  try {
+    const manifest = getStoredChunkManifest(storage, key)
+    storage.removeItem(buildDataKey(key))
+    removeChunkEntries(storage, key, manifest)
+  } catch (error) {
+    console.warn(`[useKV] Failed to remove browser storage value for key "${key}" from ${label}`, error)
+  }
+}
+
+const readMetadataFromStorage = (
+  storage: Storage | null,
+  key: string,
+  label: 'localStorage' | 'sessionStorage'
+): StorageMetadata | undefined => {
+  if (!storage) {
+    return undefined
+  }
+
+  try {
+    const raw = storage.getItem(`${METADATA_PREFIX}${key}`)
+    if (!raw) {
+      return undefined
+    }
+
+    const parsed = JSON.parse(raw) as Partial<StorageMetadata>
+    if (typeof parsed?.lastUpdatedAt !== 'number') {
+      return undefined
+    }
+
+    const lastSyncedAt = typeof parsed.lastSyncedAt === 'number' ? parsed.lastSyncedAt : null
+    return { lastUpdatedAt: parsed.lastUpdatedAt, lastSyncedAt }
+  } catch (error) {
+    console.warn(`[useKV] Failed to parse browser storage metadata for key "${key}" in ${label}`, error)
+    return undefined
+  }
+}
+
+const writeMetadataToStorage = (
+  storage: Storage | null,
+  key: string,
+  metadata: StorageMetadata,
+  label: 'localStorage' | 'sessionStorage'
+): void => {
+  if (!storage) {
+    return
+  }
+
+  try {
+    storage.setItem(`${METADATA_PREFIX}${key}`, JSON.stringify(metadata))
+  } catch (error) {
+    console.warn(`[useKV] Failed to persist browser storage metadata for key "${key}" in ${label}`, error)
+  }
+}
+
+const removeMetadataFromStorage = (
+  storage: Storage | null,
+  key: string,
+  label: 'localStorage' | 'sessionStorage'
+): void => {
+  if (!storage) {
+    return
+  }
+
+  try {
+    storage.removeItem(`${METADATA_PREFIX}${key}`)
+  } catch (error) {
+    console.warn(`[useKV] Failed to remove browser storage metadata for key "${key}" from ${label}`, error)
+  }
+}
+
 const buildDefaultAdapter = (): StorageAdapter => {
   if (typeof window === 'undefined') {
     return {
@@ -159,100 +325,81 @@ const buildDefaultAdapter = (): StorageAdapter => {
 
   return {
     read: <T,>(key: string): T | undefined => {
-      try {
-        const storage = window.localStorage
-        if (!storage) {
-          return undefined
-        }
-
-        const raw = storage.getItem(buildDataKey(key))
-        if (raw === null || raw === undefined) {
-          return undefined
-        }
-
-        const parsed = tryParseJSON<unknown>(raw)
-        if (parsed && isChunkManifest(parsed)) {
-          return readChunkedValue<T>(storage, key, parsed)
-        }
-
-        return (parsed as T) ?? undefined
-      } catch (error) {
-        console.warn(`[useKV] Failed to parse browser storage for key "${key}"`, error)
-        return undefined
+      const localStorageRef = getLocalStorage()
+      const localValue = readValueFromStorage<T>(localStorageRef, key)
+      if (localValue !== undefined) {
+        return localValue
       }
+
+      const sessionStorageRef = getSessionStorage()
+      const sessionValue = readValueFromStorage<T>(sessionStorageRef, key)
+      if (sessionValue !== undefined && localStorageRef) {
+        try {
+          const serialized = JSON.stringify(sessionValue)
+          if (typeof serialized === 'string') {
+            persistSerializedValue(localStorageRef, key, serialized, 'localStorage')
+          }
+        } catch (error) {
+          console.warn(
+            `[useKV] Failed to backfill localStorage from sessionStorage for key "${key}"`,
+            error
+          )
+        }
+      }
+
+      return sessionValue
     },
     write: <T,>(key: string, value: T): void => {
       try {
         const serialized = JSON.stringify(value)
-        const storage = window.localStorage
-        if (!storage || typeof serialized !== 'string') {
+        if (typeof serialized !== 'string') {
           return
         }
 
-        const manifest = getStoredChunkManifest(storage, key)
-        removeChunkEntries(storage, key, manifest)
+        const localStorageRef = getLocalStorage()
+        persistSerializedValue(localStorageRef, key, serialized, 'localStorage')
 
-        if (serialized.length > CHUNK_SIZE_LIMIT) {
-          writeChunkedValue(storage, key, serialized)
-          return
-        }
-
-        storage.setItem(buildDataKey(key), serialized)
+        const sessionStorageRef = getSessionStorage()
+        persistSerializedValue(sessionStorageRef, key, serialized, 'sessionStorage')
       } catch (error) {
-        console.warn(`[useKV] Failed to persist browser storage value for key "${key}"`, error)
+        console.warn(`[useKV] Failed to serialize browser storage value for key "${key}"`, error)
       }
     },
     remove: (key: string): void => {
-      try {
-        const storage = window.localStorage
-        if (!storage) {
-          return
-        }
+      const localStorageRef = getLocalStorage()
+      removeValueFromStorage(localStorageRef, key, 'localStorage')
 
-        const manifest = getStoredChunkManifest(storage, key)
-        storage.removeItem(buildDataKey(key))
-        removeChunkEntries(storage, key, manifest)
-      } catch (error) {
-        console.warn(`[useKV] Failed to remove browser storage value for key "${key}"`, error)
-      }
+      const sessionStorageRef = getSessionStorage()
+      removeValueFromStorage(sessionStorageRef, key, 'sessionStorage')
     },
     readMetadata: (key: string): StorageMetadata | undefined => {
-      try {
-        const raw = window.localStorage?.getItem(`${METADATA_PREFIX}${key}`)
-        if (!raw) {
-          return undefined
-        }
-
-        const parsed = JSON.parse(raw) as Partial<StorageMetadata>
-        if (typeof parsed?.lastUpdatedAt !== 'number') {
-          return undefined
-        }
-
-        const lastSyncedAt =
-          typeof parsed.lastSyncedAt === 'number' ? parsed.lastSyncedAt : null
-
-        return {
-          lastUpdatedAt: parsed.lastUpdatedAt,
-          lastSyncedAt
-        }
-      } catch (error) {
-        console.warn(`[useKV] Failed to parse browser storage metadata for key "${key}"`, error)
-        return undefined
+      const localStorageRef = getLocalStorage()
+      const metadata = readMetadataFromStorage(localStorageRef, key, 'localStorage')
+      if (metadata) {
+        return metadata
       }
+
+      const sessionStorageRef = getSessionStorage()
+      const sessionMetadata = readMetadataFromStorage(sessionStorageRef, key, 'sessionStorage')
+      if (sessionMetadata && localStorageRef) {
+        writeMetadataToStorage(localStorageRef, key, sessionMetadata, 'localStorage')
+      }
+
+      return sessionMetadata
     },
     writeMetadata: (key: string, metadata: StorageMetadata): void => {
-      try {
-        window.localStorage?.setItem(`${METADATA_PREFIX}${key}`, JSON.stringify(metadata))
-      } catch (error) {
-        console.warn(`[useKV] Failed to persist browser storage metadata for key "${key}"`, error)
-      }
+      const localStorageRef = getLocalStorage()
+      writeMetadataToStorage(localStorageRef, key, metadata, 'localStorage')
+
+      const sessionStorageRef = getSessionStorage()
+      writeMetadataToStorage(sessionStorageRef, key, metadata, 'sessionStorage')
     },
     removeMetadata: (key: string): void => {
-      try {
-        window.localStorage?.removeItem(`${METADATA_PREFIX}${key}`)
-      } catch (error) {
-        console.warn(`[useKV] Failed to remove browser storage metadata for key "${key}"`, error)
-      }
+      const localStorageRef = getLocalStorage()
+      removeMetadataFromStorage(localStorageRef, key, 'localStorage')
+
+      const sessionStorageRef = getSessionStorage()
+      removeMetadataFromStorage(sessionStorageRef, key, 'sessionStorage')
     }
   }
 }
