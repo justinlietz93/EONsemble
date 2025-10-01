@@ -139,6 +139,7 @@ re-initialization, and collaboration history replay.
   cleared. Cover this with
   `npx vitest run tests/components/app.knowledge-drop.logic.test.ts` and
   `npx vitest run tests/components/app.knowledge-persistence.test.tsx -t "restores knowledge when storage events force a persistence reset mid-session"`.
+
 - When investigating suspected regressions, reproduce the offline scenario by
   mocking `fetchPersistedValue` to resolve `undefined` and verify that
   previously added entries remain visible.

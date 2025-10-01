@@ -156,7 +156,6 @@ export function useKV<T>(
     const load = async () => {
       const loadRevision = revisionRef.current
       const stored = await fetchPersistedValue<T>(key)
-
       const fallback = defaultValueRef.current
       const pendingSync = hasPendingSyncRef.current
 

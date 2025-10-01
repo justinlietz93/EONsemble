@@ -11,7 +11,6 @@ const persistenceMocks = vi.hoisted(() => ({
 vi.mock('@/lib/api/persistence', () => persistenceMocks)
 
 const { fetchPersistedValue, savePersistedValue } = persistenceMocks
-
 const dispatchStorageEvent = (key: string, newValue: string | null) => {
   const event = new StorageEvent('storage', { key, newValue })
   Object.defineProperty(event, 'storageArea', {
@@ -68,7 +67,6 @@ class QuotaStorage implements Storage {
     return Object.fromEntries(this.store.entries())
   }
 }
-
 describe('useKV', () => {
   beforeEach(() => {
     clearKVStore()
@@ -109,7 +107,6 @@ describe('useKV', () => {
     expect(result.current[0]).toEqual([{ id: 'entry-1' }])
     expect(fetchPersistedValue).toHaveBeenCalledTimes(1)
   })
-
   it('drops stale persisted values when hydration resolves after a newer local update', async () => {
     let resolveFetch: ((value: unknown) => void) | undefined
     fetchPersistedValue.mockImplementation(
@@ -136,7 +133,6 @@ describe('useKV', () => {
     expect(result.current[0]).toEqual([{ id: 'local-entry' }])
     expect(fetchPersistedValue).toHaveBeenCalledTimes(1)
   })
-
   it('hydrates from persisted storage when available', async () => {
     type Entry = { id: string }
 
