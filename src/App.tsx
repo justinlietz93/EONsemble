@@ -13,6 +13,7 @@ import { useSessionDiagnostics } from '@/hooks/useSessionDiagnostics'
 import { useKnowledgeSnapshotGuard } from '@/hooks/useKnowledgeSnapshotGuard'
 
 const SESSION_TAB_KEY = 'eon.activeTab'
+const KNOWLEDGE_SNAPSHOT_STORAGE_KEY = 'eon.session.knowledgeSnapshot'
 
 const resolveInitialActiveTab = (): string => {
   if (typeof window === 'undefined') {
@@ -192,7 +193,8 @@ function App() {
 
   useKnowledgeSnapshotGuard(knowledgeBase, setKnowledgeBase, {
     isUnexpectedEmpty: isUnexpectedKnowledgeEmpty,
-    getContext: knowledgeRestorationContext
+    getContext: knowledgeRestorationContext,
+    storageKey: KNOWLEDGE_SNAPSHOT_STORAGE_KEY
   })
 
   useEffect(() => {

@@ -2,6 +2,34 @@
 
 ## Decision Log
 
+### 2025-09-29 — Preserve knowledge snapshots across remounts and session resets
+- **Context**: Manual repros still reveal that after uploading corpus files the knowledge counter occasionally drops to zero when
+  the app remounts (e.g., dev StrictMode double mounts, hot reloads, or browser tab sleep). The in-memory snapshot guard covers
+  single-mount tab switches, but once React tears the tree down the hook loses its cached array and cannot restore the entries.
+  We need a session-scoped snapshot that survives component remounts without waiting for the persistence API or `localStorage`
+  mirror, so that transient reloads keep knowledge visible.
+- **Options Considered**:
+  1. Extend `useKnowledgeSnapshotGuard` to persist the last non-empty payload into `sessionStorage` and restore from it when the
+     hook reinitialises with an empty knowledge array.
+  2. Teach `useKV` to retain a "last non-empty" payload per key (separate from the live value) and expose a reset helper that
+     consumers can invoke when they detect an unexpected empty state.
+  3. Introduce a dedicated `usePersistentKnowledge` hook that composes `useKV`, snapshot persistence, and diagnostics in one
+     place, leaving `App.tsx` to consume the higher-level abstraction.
+  4. Spin up a background service worker that mirrors knowledge mutations into IndexedDB and restores them on navigation or
+     remount events.
+  5. Require the persistence server to expose a `GET /last-known-non-empty` endpoint that the frontend calls whenever it boots
+     into an empty knowledge state.
+- **Evaluation** (ranked by relevance & likelihood of success):
+  1. **Option 1** — Minimal surface area, keeps guard responsibilities local, easy to test with JSDOM mocks. *Rank: 1*.
+  2. **Option 2** — Centralises fallback but complicates `useKV` with knowledge-specific semantics. *Rank: 2*.
+  3. **Option 3** — Cleaner API for `App.tsx` yet duplicates logic already in `useKV`/guard. *Rank: 3*.
+  4. **Option 4** — Robust but heavyweight and unnecessary for the current regression. *Rank: 4*.
+  5. **Option 5** — Requires backend changes and still fails offline. *Rank: 5*.
+- **Selected Approach**: Option 1 — persist the guard snapshot to `sessionStorage` (namespaced per key), hydrate it on mount, and
+  remove it when the empty state is intentional so strict clears keep behaving.
+- **Self-Critique**: Session storage has the same ~5 MB quota as `localStorage`; large corpora could still overflow. Will log
+  failures and keep documentation explicit about storage limits so QA can spot quota issues quickly.
+
 ### 2025-09-29 — Restore knowledge snapshot after unexpected tab-driven resets
 - **Context**: Manual QA continues to show the knowledge counter dropping to zero immediately after tab switches, even though
   uploads succeed and mirrors persist entries. Instrumentation indicates the state occasionally becomes an empty array without
@@ -290,6 +318,7 @@
     6. ✅ Thread structured `knowledge-base` state change logs into `useSessionDiagnostics` to capture future regressions with contextual evidence. *(2025-09-29: Added knowledge delta/sample logging with expanded hook tests.)*
     7. [DONE] Introduce shrinkage-aware hydration guards so empty backend payloads cannot overwrite richer mirror data when metadata claims the writes succeeded. *(2025-09-29 Evening: Added `shouldAcceptHydration` predicate support to `useKV`, wired knowledge-base guard in `App.tsx`, and extended hook regressions with a shrinkage veto case.)*
     8. ✅ Ship a snapshot guard that restores the last non-empty knowledge payload when the rendered array unexpectedly clears after navigation. *(2025-09-29: Added `useKnowledgeSnapshotGuard`, wired it through `App.tsx`, and validated with focused hook tests.)*
+    9. [DONE] Persist the guard snapshot to `sessionStorage` so remounts restore knowledge before the persistence API responds. *(2025-09-29 Evening: Updated `useKnowledgeSnapshotGuard` with a sessionStorage fallback, added guard + app wiring, and covered the behaviour with new hook tests.)*
   - Strict Judge Checklist: Confirm no additional regressions in agentic operations (`AutonomousEngine` single + continuous run)
     after the persistence changes. *(2025-09-30: Verified by rerunning `npm run test -- --run tests/components/screens.test.tsx`
     following the replay updates.)*
@@ -310,6 +339,7 @@
   - Status Notes (2025-09-29 — Diagnostics): `useSessionDiagnostics` now emits console traces for knowledge count deltas and sample churn, guarding against silent resets. Hook tests cover increase/decrease/sample-change cases, giving observers richer breadcrumbs during manual repro.
   - Status Notes (2025-09-29 — Regression Harness): Added `retains knowledge after navigating across collaboration and settings tabs during deferred uploads` to `tests/components/app.knowledge-persistence.test.tsx`, covering multi-tab unmount/mount cycles with delayed FileReader completion. The test currently passes, indicating the live failure likely stems from an environment-specific condition not yet modelled.
   - Status Notes (2025-09-29 — Snapshot Guard): Implemented the in-app snapshot restoration hook with contextual diagnostics. Hook-level tests prove drop-to-zero states auto-heal while allowing explicit clears when flagged. Pending live validation before downgrading from `[RETRYING]`.
+  - Status Notes (2025-09-29 — Session Snapshot Persistence): Session storage fallback implemented; `useKnowledgeSnapshotGuard` now persists the last non-empty payload and clears it when emptiness is intentional. Verified via `npm test -- --run tests/hooks/useKnowledgeSnapshotGuard.test.tsx` and `npm test -- --run tests/components/app.knowledge-persistence.test.tsx`.
 - [DONE] Document and reproduce the hydration race where late-arriving persistence reads overwrite fresh local writes.
   - Decision Log (2025-09-29):
     1. Extend the existing RTL suite with a controllable fetch promise that resolves after a local corpus upload.

@@ -9,6 +9,58 @@ const cloneEntries = (entries: KnowledgeEntry[]): KnowledgeEntry[] =>
     tags: [...entry.tags]
   }))
 
+const readPersistedSnapshot = (storageKey: string): KnowledgeEntry[] | null => {
+  if (typeof window === 'undefined') {
+    return null
+  }
+
+  try {
+    const raw = window.sessionStorage?.getItem(storageKey)
+    if (!raw) {
+      return null
+    }
+
+    const parsed = JSON.parse(raw)
+    if (!Array.isArray(parsed)) {
+      return null
+    }
+
+    return parsed
+      .filter((entry): entry is KnowledgeEntry => typeof entry === 'object' && entry !== null)
+      .map(entry => ({
+        ...entry,
+        tags: Array.isArray(entry.tags) ? [...entry.tags] : []
+      }))
+  } catch (error) {
+    console.warn('[KnowledgeSnapshotGuard] Failed to parse persisted session snapshot', error)
+    return null
+  }
+}
+
+const persistSnapshot = (storageKey: string, entries: KnowledgeEntry[]): void => {
+  if (typeof window === 'undefined') {
+    return
+  }
+
+  try {
+    window.sessionStorage?.setItem(storageKey, JSON.stringify(entries))
+  } catch (error) {
+    console.warn('[KnowledgeSnapshotGuard] Failed to persist session snapshot', error)
+  }
+}
+
+const clearPersistedSnapshot = (storageKey: string): void => {
+  if (typeof window === 'undefined') {
+    return
+  }
+
+  try {
+    window.sessionStorage?.removeItem(storageKey)
+  } catch (error) {
+    console.warn('[KnowledgeSnapshotGuard] Failed to clear session snapshot', error)
+  }
+}
+
 type GuardOptions = {
   /**
    * Optional predicate to flag whether the current empty state should trigger a restoration.
@@ -19,6 +71,10 @@ type GuardOptions = {
    * Provides additional context for diagnostics when the guard restores a snapshot.
    */
   getContext?: () => Record<string, unknown>
+  /**
+   * Optional sessionStorage key used to persist the snapshot across component remounts.
+   */
+  storageKey?: string
 }
 
 export function useKnowledgeSnapshotGuard(
@@ -26,12 +82,28 @@ export function useKnowledgeSnapshotGuard(
   setKnowledgeBase: (updater: KVUpdater<KnowledgeEntry[]>) => void,
   options?: GuardOptions
 ): void {
-  const snapshotRef = useRef<KnowledgeEntry[]>(
-    Array.isArray(knowledgeBase) && knowledgeBase.length > 0
-      ? cloneEntries(knowledgeBase)
-      : []
-  )
-  const previousCountRef = useRef<number>(Array.isArray(knowledgeBase) ? knowledgeBase.length : 0)
+  const storageKeyRef = useRef<string | null>(options?.storageKey ?? null)
+  if (storageKeyRef.current !== (options?.storageKey ?? null)) {
+    storageKeyRef.current = options?.storageKey ?? null
+  }
+
+  const snapshotRef = useRef<KnowledgeEntry[]>([])
+  const previousCountRef = useRef<number>(0)
+  const initializedRef = useRef(false)
+  if (!initializedRef.current) {
+    if (Array.isArray(knowledgeBase) && knowledgeBase.length > 0) {
+      snapshotRef.current = cloneEntries(knowledgeBase)
+      previousCountRef.current = knowledgeBase.length
+    } else if (storageKeyRef.current) {
+      const persisted = readPersistedSnapshot(storageKeyRef.current)
+      if (persisted && persisted.length > 0) {
+        snapshotRef.current = cloneEntries(persisted)
+        previousCountRef.current = persisted.length
+      }
+    }
+
+    initializedRef.current = true
+  }
   const getContextRef = useRef<GuardOptions['getContext']>(options?.getContext)
   const isUnexpectedEmptyRef = useRef<GuardOptions['isUnexpectedEmpty']>(options?.isUnexpectedEmpty)
 
@@ -47,17 +119,38 @@ export function useKnowledgeSnapshotGuard(
     const currentCount = Array.isArray(knowledgeBase) ? knowledgeBase.length : 0
 
     if (Array.isArray(knowledgeBase) && knowledgeBase.length > 0) {
-      snapshotRef.current = cloneEntries(knowledgeBase)
+      const cloned = cloneEntries(knowledgeBase)
+      snapshotRef.current = cloned
       previousCountRef.current = currentCount
+      if (storageKeyRef.current) {
+        persistSnapshot(storageKeyRef.current, cloned)
+      }
       return
     }
 
-    const hadPreviousEntries = previousCountRef.current > 0
+    const storageKey = storageKeyRef.current
+    if (currentCount === 0 && storageKey && snapshotRef.current.length === 0) {
+      const persisted = readPersistedSnapshot(storageKey)
+      if (persisted && persisted.length > 0) {
+        snapshotRef.current = cloneEntries(persisted)
+      }
+    }
+
+    const hadPreviousEntries = previousCountRef.current > 0 || snapshotRef.current.length > 0
     const hasSnapshot = snapshotRef.current.length > 0
     const isUnexpectedEmpty =
       typeof isUnexpectedEmptyRef.current === 'function'
         ? isUnexpectedEmptyRef.current()
         : hadPreviousEntries
+
+    if (currentCount === 0 && !isUnexpectedEmpty) {
+      if (storageKey) {
+        clearPersistedSnapshot(storageKey)
+      }
+      snapshotRef.current = []
+      previousCountRef.current = 0
+      return
+    }
 
     if (currentCount === 0 && hadPreviousEntries && hasSnapshot && isUnexpectedEmpty) {
       const context = typeof getContextRef.current === 'function' ? getContextRef.current() : undefined
@@ -74,6 +167,12 @@ export function useKnowledgeSnapshotGuard(
         }
         return snapshot
       })
+
+      if (storageKey) {
+        persistSnapshot(storageKey, snapshot)
+      }
+      previousCountRef.current = snapshot.length
+      return
     }
 
     previousCountRef.current = currentCount

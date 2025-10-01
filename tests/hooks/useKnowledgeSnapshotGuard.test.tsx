@@ -1,4 +1,4 @@
-import { act, renderHook } from '@testing-library/react'
+import { act, renderHook, waitFor } from '@testing-library/react'
 import { useCallback, useState } from 'react'
 
 import type { KnowledgeEntry } from '@/App'
@@ -15,6 +15,10 @@ const buildEntry = (id: string): KnowledgeEntry => ({
 })
 
 describe('useKnowledgeSnapshotGuard', () => {
+  beforeEach(() => {
+    sessionStorage.clear()
+  })
+
   it('restores the last snapshot when the knowledge base unexpectedly becomes empty', () => {
     const initialEntries = [buildEntry('1'), buildEntry('2')]
 
@@ -62,5 +66,65 @@ describe('useKnowledgeSnapshotGuard', () => {
     })
 
     expect(result.current.knowledge).toHaveLength(0)
+  })
+
+  it('restores the persisted session snapshot after a remount with an empty knowledge array', async () => {
+    const storageKey = 'test.session.snapshot'
+    const initialEntries = [buildEntry('persisted')]
+
+    const { unmount } = renderHook(() => {
+      const [knowledge, setKnowledge] = useState<KnowledgeEntry[]>(initialEntries)
+      const kvSet = useCallback((updater: KVUpdater<KnowledgeEntry[]>) => {
+        setKnowledge(prev => (typeof updater === 'function' ? updater(prev) : updater))
+      }, [])
+
+      useKnowledgeSnapshotGuard(knowledge, kvSet, { storageKey })
+
+      return { knowledge }
+    })
+
+    expect(JSON.parse(sessionStorage.getItem(storageKey) ?? '[]')).toHaveLength(1)
+    unmount()
+
+    const { result } = renderHook(() => {
+      const [knowledge, setKnowledge] = useState<KnowledgeEntry[]>([])
+      const kvSet = useCallback((updater: KVUpdater<KnowledgeEntry[]>) => {
+        setKnowledge(prev => (typeof updater === 'function' ? updater(prev) : updater))
+      }, [])
+
+      useKnowledgeSnapshotGuard(knowledge, kvSet, { storageKey })
+
+      return { knowledge }
+    })
+
+    await waitFor(() => {
+      expect(result.current.knowledge).toHaveLength(1)
+    })
+    expect(result.current.knowledge[0]?.id).toBe('persisted')
+  })
+
+  it('clears the persisted snapshot when emptiness is expected', () => {
+    const storageKey = 'test.session.snapshot'
+    const initialEntries = [buildEntry('1')]
+
+    const { result } = renderHook(() => {
+      const [knowledge, setKnowledge] = useState<KnowledgeEntry[]>(initialEntries)
+      const kvSet = useCallback((updater: KVUpdater<KnowledgeEntry[]>) => {
+        setKnowledge(prev => (typeof updater === 'function' ? updater(prev) : updater))
+      }, [])
+      const allowEmpty = useCallback(() => false, [])
+
+      useKnowledgeSnapshotGuard(knowledge, kvSet, { storageKey, isUnexpectedEmpty: allowEmpty })
+
+      return { setKnowledge: kvSet }
+    })
+
+    act(() => {
+      result.current.setKnowledge(() => [])
+    })
+
+    return waitFor(() => {
+      expect(sessionStorage.getItem(storageKey)).toBeNull()
+    })
   })
 })

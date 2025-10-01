@@ -111,6 +111,13 @@ re-initialization, and collaboration history replay.
   `isUnexpectedEmpty` when building a future "clear all" workflow to avoid
   automatic restoration. Validate via
   `npx vitest run tests/hooks/useKnowledgeSnapshotGuard.test.tsx`.
+- Evening 2025-09-29 (follow-up): The snapshot guard now persists the last
+  non-empty payload into `sessionStorage` (`eon.session.knowledgeSnapshot`). On
+  remount (StrictMode double mounts, tab sleep/wake) the guard rehydrates from
+  this cache before the persistence API responds. Intentional clears call the
+  guard with `isUnexpectedEmpty` returning `false`, which also wipes the stored
+  snapshot. Validate by running
+  `npx vitest run tests/hooks/useKnowledgeSnapshotGuard.test.tsx -t "restores the persisted session snapshot after a remount"` once the new test is added.
 - When investigating suspected regressions, reproduce the offline scenario by
   mocking `fetchPersistedValue` to resolve `undefined` and verify that
   previously added entries remain visible.
