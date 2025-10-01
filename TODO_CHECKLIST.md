@@ -800,11 +800,24 @@
   - Acceptance: Either functional integration or explicit no-op path with user-facing messaging when remote vector store unavailable.
   - Strict Review (2025-01-16): Checklist update keeps scope bounded (configuration threading + UX fallback) and documents residual coupling risk for follow-up mitigation.
   - Status Notes (2025-09-29): Introduced `agentClient` and updated `useAgentSettingsState` so Qdrant probes and Ollama model lists use the same client as runs, ensuring settings and environment overrides drive every consumer.
-- [NOT STARTED] Broaden automated coverage for Ollama/Qdrant settings persistence and validation logic beyond URL normalisation.
+- [DONE] Broaden automated coverage for Ollama/Qdrant settings persistence and validation logic beyond URL normalisation.
   - Acceptance: Component tests exercising form interactions and persistence writes.
+  - Status Notes (2025-09-30): Added focused RTL coverage in `tests/components/agent-settings.provider-settings.test.tsx` to
+    verify that Ollama/Qdrant credentials persist through `useKV`, trim/normalise correctly, and that client probes honour the
+    stored values. The test harness stubs persistence and provider APIs so form updates drive both storage writes and
+    `agentClient` configuration before issuing refresh/probe actions.
+  - Strict Review (2025-09-30): `npm run test -- --run tests/components/agent-settings.provider-settings.test.tsx` exercises the
+    new scenarios and confirms persistence writes plus probe flows execute without regressions.
 
 ---
 
 ## Additional Observability & Follow-ups
-- [NOT STARTED] Assess whether the persistence API should expose differentiated error metadata (network vs 404 vs validation) to assist in diagnosing state drops.
+  - [DONE] Assess whether the persistence API should expose differentiated error metadata (network vs 404 vs validation) to assist in diagnosing state drops.
   - Acceptance: Proposal or implementation notes outlining API adjustments and client handling.
+  - Decision Notes (2025-09-30): Recommend extending `fetchPersistedValue`/`savePersistedValue` responses to include a
+    discriminated `errorType` (`'network' | 'not-found' | 'validation' | 'unknown'`) and optional HTTP status, allowing
+    `useKV` to emit targeted diagnostics. Client hooks should surface retry guidance for transient network failures while
+    preserving the current silent fallback for 404s. Validation errors (malformed payloads) will trigger a toast plus a
+    structured log entry that records the offending key, enabling QA to trace corrupted storage mirrors. Documented the
+    handling expectations in the storage runbook so future API work can prioritise backlog tickets for server-side schema
+    enforcement.
