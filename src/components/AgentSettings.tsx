@@ -36,6 +36,11 @@ export function AgentSettings({ onConfigChange, onAutonomousChange }: AgentSetti
     openRouterLoading,
     openRouterError,
     ollamaBaseUrl,
+    qdrantBaseUrl,
+    qdrantStatus,
+    qdrantLoading,
+    qdrantMessage,
+    probeQdrant,
     handleAgentConfigChange,
     handleProviderConfigChange,
     handleAutonomousConfigChange,
@@ -136,6 +141,13 @@ export function AgentSettings({ onConfigChange, onAutonomousChange }: AgentSetti
               error: ollamaError,
               baseUrl: ollamaBaseUrl,
               modelCount: ollamaModels.length
+            }}
+            qdrantState={{
+              baseUrl: qdrantBaseUrl,
+              status: qdrantStatus,
+              loading: qdrantLoading,
+              message: qdrantMessage,
+              onProbe: probeQdrant
             }}
           />
         </TabsContent>

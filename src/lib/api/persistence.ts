@@ -27,13 +27,18 @@ export async function fetchPersistedValue<T>(key: string): Promise<T | undefined
 
 export async function savePersistedValue<T>(key: string, value: T): Promise<void> {
   try {
-    await fetch(buildUrl(key), {
+    const response = await fetch(buildUrl(key), {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ value })
     })
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`)
+    }
   } catch (error) {
     console.warn(`Failed to persist value for key "${key}"`, error)
+    throw error
   }
 }
 

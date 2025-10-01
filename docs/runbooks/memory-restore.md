@@ -84,9 +84,109 @@ re-initialization, and collaboration history replay.
   persistence API is unreachable. Failed hydration attempts no longer overwrite
   populated knowledge arrays; the hook only falls back to defaults when no
   memory is present.
+- Beginning 2025-09-29, `useKV` also mirrors each write into
+  `window.localStorage` under the `eon.kv.<key>` namespace. On reload the mirror
+  seeds the in-memory store before server hydration, ensuring knowledge remains
+  visible even if persistence fetches fail. Mirror entries are cleared by
+  `clearKVStore()` and now automatically chunk large payloads across multiple
+  `localStorage` records when the JSON blob exceeds ~250 kB. This avoids the
+  single-entry quota that previously caused knowledge loss after uploading
+  multi-megabyte corpora. Validate with
+  `npx vitest run tests/hooks/useKV.test.tsx -t "persists large payloads by chunking when browser storage rejects oversized entries"`.
+- The mirror now stores sync metadata (`lastUpdatedAt`, `lastSyncedAt`) so the
+  hook can detect unsynchronised writes. If hydration returns an empty payload
+  while the mirror reports pending changes, `useKV` skips the server data,
+  replays the mirror payload back to the persistence API, and keeps the UI in
+  sync. Inspect `tests/hooks/useKV.test.tsx` (`keeps mirrored values when pending
+  sync metadata exists...`) or `tests/components/app.knowledge-sync.test.tsx` for
+  regression coverage.
+- Evening 2025-09-29: `useKV` exposes an optional hydration acceptance predicate
+  so domain-specific stores (e.g., the knowledge base) can reject clearly
+  regressive payloads even when metadata reports everything in sync. When the
+  predicate vetoes a payload, the hook retains the mirror value and replays it to
+  the server. See `tests/hooks/useKV.test.tsx` (`rejects shrinkage-only hydration`)
+  once added, or the knowledge base configuration in `src/App.tsx` for a working
+  example.
+- Late 2025-09-29: `App.tsx` layers `useKnowledgeSnapshotGuard` atop the knowledge
+  store to cache the last non-empty payload. If navigation or hydration races
+  render the knowledge array empty while a snapshot exists, the guard restores
+  the cached entries and logs the associated tab/reset context. Override
+  `isUnexpectedEmpty` when building a future "clear all" workflow to avoid
+  automatic restoration. Validate via
+  `npx vitest run tests/hooks/useKnowledgeSnapshotGuard.test.tsx`.
+- Evening 2025-09-29 (follow-up): The snapshot guard now persists the last
+  non-empty payload into `sessionStorage` (`eon.session.knowledgeSnapshot`). On
+  remount (StrictMode double mounts, tab sleep/wake) the guard rehydrates from
+  this cache before the persistence API responds. Intentional clears call the
+  guard with `isUnexpectedEmpty` returning `false`, which also wipes the stored
+  snapshot. Validate by running
+  `npx vitest run tests/hooks/useKnowledgeSnapshotGuard.test.tsx -t "restores the persisted session snapshot after a remount"` once the new test is added.
+- 2025-09-29 (cross-tab restore): The guard now mirrors the snapshot into
+  `localStorage` (`${storageKey}.local`) and exposes a `restoreOnInitialLoad`
+  flag. When a new tab loads with an empty knowledge array but a local backup
+  remains, the guard restores the snapshot immediately, ensuring the UI stays
+  populated before the persistence API responds. Validate with
+  `npx vitest run tests/hooks/useKnowledgeSnapshotGuard.test.tsx -t "restores the local snapshot backup on initial load when session storage is empty"`.
+- 2025-09-29 (large snapshot support): Snapshot persistence now chunks payloads
+  larger than ~250 kB using the same manifest structure as the `useKV`
+  adapter. This prevents quota exceptions when corpora exceed 5 MB and allows
+  new tabs to rehydrate from chunked manifests. Verify with
+  `npx vitest run tests/hooks/useKnowledgeSnapshotGuard.test.tsx -t "persists large knowledge snapshots using chunked storage and restores them after remount"`.
+- Late 2025-09-29 (storage reset repro): The guard predicate now delegates to
+  `detectUnexpectedKnowledgeDrop`, which treats `persistence-reset` and
+  `auto-restore` tab reasons (or a `lastDetectedReset` of `persistence-reset`)
+  as unexpected knowledge loss even if the previous-count ref has already been
+  cleared. Cover this with
+  `npx vitest run tests/components/app.knowledge-drop.logic.test.ts` and
+  `npx vitest run tests/components/app.knowledge-persistence.test.tsx -t "restores knowledge when storage events force a persistence reset mid-session"`.
+
 - When investigating suspected regressions, reproduce the offline scenario by
   mocking `fetchPersistedValue` to resolve `undefined` and verify that
   previously added entries remain visible.
 - Run `npx vitest run tests/hooks/useKV.test.tsx` to execute the dedicated hook
   regression suite that covers both the offline fallback and successful server
   hydration flows.
+- If the persistence API hydrates `null` for a key whose default is non-null,
+  `useKV` now emits a warning and restores the configured fallback. Validate the
+  frontend behaviour with `npx vitest run tests/components/app.knowledge-persistence.test.tsx`,
+  which includes a regression covering the null-hydration scenario.
+- Knowledge setters (`setKnowledgeBase`, `setDerivationHistory`, etc.) must now
+  receive the `useKV` dispatcher directly. Components append entries via
+  functional updates (`prev => [...prev, entry]`) to avoid stale-closure races
+  when uploads complete while navigation occurs. The corpus upload guard within
+  `tests/components/app.knowledge-persistence.test.tsx` exercises this path by
+  uploading, tab-hopping immediately, and verifying both the persisted payload
+  and UI state remain intact.
+- Hydration races are prevented via per-key revision counters and a local-write
+  flag inside `useKV`. If the persistence API returns stale data after a user
+  mutation, the hook discards the payload instead of overwriting memory. The
+  regression `drops stale persisted values when hydration resolves after a newer
+  local update` (run with `npx vitest run tests/hooks/useKV.test.tsx`) fails if
+  the guard is removed.
+- Validate mirror hydration by running
+  `npx vitest run tests/components/app.knowledge-persistence.test.tsx -t "browser mirror"`,
+  which unmounts the app, clears the in-memory cache, and confirms the
+  `localStorage` mirror repopulates knowledge entries while the persistence API
+  stays offline. To verify the metadata guard against stale hydration, execute
+  `npx vitest run tests/components/app.knowledge-sync.test.tsx`.
+- Late 2025-09-29 (mirror hardening): The `useKV` adapter now writes knowledge
+  payloads and sync metadata to both `localStorage` and `sessionStorage`. If the
+  primary mirror returns `null` during tab switches (privacy mode, transient
+  quota errors), the hook hydrates from the session shadow and backfills the
+  primary store. Run
+  `npx vitest run tests/hooks/useKV.test.tsx -t "hydrates from sessionStorage when localStorage is empty"`
+  and `-t "writes mirrored values and metadata to localStorage and sessionStorage"`
+  to confirm the dual-layer behaviour, and `-t "clears both browser mirrors when the KV store is cleared"`
+  to ensure cleanup purges both caches.
+- Cross-tab sessions now subscribe to `storage` events so updates in one
+  browser tab refresh the others without requiring manual reloads. Validate the
+  listener with
+  `npx vitest run tests/hooks/useKV.test.tsx -t "syncs updates from other tabs without issuing duplicate persistence writes"`
+  and ensure regressive payloads are still rejected via the accompanying
+  predicate-focused test case.
+- Session reset diagnostics can be enabled via
+  `window.localStorage.setItem('eon.debugSessionTrace', 'true')`. The enhanced
+  `useSessionDiagnostics` hook logs mounts, unmounts, and unexpected tab resets
+  together with the active goal ID and a sampled knowledge payload. Exercise the
+  behaviour with `npx vitest run tests/hooks/useSessionDiagnostics.test.tsx` to
+  confirm logging stays consistent.

@@ -10,6 +10,7 @@ import { Separator } from '@/components/ui/separator'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Plus, Database, MagnifyingGlass, Tag, Calendar, Trash, Upload, Network, Download, FileText } from '@phosphor-icons/react'
 import { KnowledgeEntry, AgentResponse, PhysicsGoal } from '@/App'
+import type { KVUpdater } from '@/hooks/useKV'
 import { CorpusUpload } from '@/components/CorpusUpload'
 import { KnowledgeGraph } from '@/components/KnowledgeGraph'
 import { formatMarkdownSection, formatTimestamp } from '@/lib/markdown-utils'
@@ -19,7 +20,7 @@ import { toast } from 'sonner'
 
 interface KnowledgeBaseProps {
   knowledgeBase: KnowledgeEntry[]
-  setKnowledgeBase: (knowledge: KnowledgeEntry[]) => void
+  setKnowledgeBase: (knowledge: KVUpdater<KnowledgeEntry[]>) => void
   derivationHistory?: AgentResponse[]
   goals?: PhysicsGoal[]
 }
@@ -58,7 +59,10 @@ export function KnowledgeBase({ knowledgeBase, setKnowledgeBase, derivationHisto
       timestamp: new Date().toISOString()
     }
 
-    setKnowledgeBase([...(knowledgeBase || []), entry])
+    setKnowledgeBase(prev => [
+      ...(Array.isArray(prev) ? prev : []),
+      entry
+    ])
     setNewEntry({
       title: '',
       content: '',
@@ -68,7 +72,9 @@ export function KnowledgeBase({ knowledgeBase, setKnowledgeBase, derivationHisto
   }
 
   const handleDeleteEntry = (entryId: string) => {
-    setKnowledgeBase((knowledgeBase || []).filter(entry => entry.id !== entryId))
+    setKnowledgeBase(prev =>
+      (Array.isArray(prev) ? prev : []).filter(entry => entry.id !== entryId)
+    )
   }
 
   const addTag = () => {

@@ -4,6 +4,11 @@ import { toast } from 'sonner'
 import { useKV } from '@/hooks/useKV'
 import type { AgentConfig, LLMProvider, ProviderSettings } from '@/types/agent'
 import { DEFAULT_PROVIDER_SETTINGS } from '@/types/agent'
+import {
+  configureAgentClient,
+  listOllamaModels,
+  probeQdrant as probeQdrantClient
+} from '@/lib/api/agentClient'
 import type { AutonomousConfig } from '@/types/autonomous'
 import { DEFAULT_AUTONOMOUS_CONFIG } from '@/types/autonomous'
 import { fetchOpenAIModelIds, type FetchOpenAIModelOptions } from '@/lib/api/providers'
@@ -17,9 +22,6 @@ import {
   cloneAutonomousDefaults,
   normalizeBaseUrl
 } from './defaults'
-
-interface OllamaModel { name?: string | null }
-interface OllamaTagResponse { models?: OllamaModel[] }
 
 interface OpenRouterModel { id?: string | null; name?: string | null }
 interface OpenRouterResponse {
@@ -49,6 +51,11 @@ export interface AgentSettingsState {
   openRouterError: string | null
   ollamaBaseUrl: string
   openRouterBaseUrl: string
+  qdrantBaseUrl: string
+  qdrantStatus: 'unknown' | 'ready' | 'error'
+  qdrantLoading: boolean
+  qdrantMessage: string | null
+  probeQdrant: () => Promise<void>
   handleAgentConfigChange: <Field extends keyof AgentConfig>(
     agentId: string,
     field: Field,
@@ -100,6 +107,10 @@ export function useAgentSettingsState({
   const [openRouterLoading, setOpenRouterLoading] = useState(false)
   const [openRouterError, setOpenRouterError] = useState<string | null>(null)
 
+  const [qdrantStatus, setQdrantStatus] = useState<'unknown' | 'ready' | 'error'>('unknown')
+  const [qdrantLoading, setQdrantLoading] = useState(false)
+  const [qdrantMessage, setQdrantMessage] = useState<string | null>(null)
+
   const defaultReferer = useMemo(() => {
     if (typeof window === 'undefined') {
       return 'http://localhost'
@@ -138,6 +149,10 @@ export function useAgentSettingsState({
     }
   }, [providerConfigs, setProviderConfigs])
 
+  useEffect(() => {
+    configureAgentClient(providerConfigs ?? cloneProviderDefaults())
+  }, [providerConfigs])
+
   const ollamaBaseUrl = useMemo(() => {
     const fallback = DEFAULT_PROVIDER_SETTINGS.ollama.baseUrl ?? 'http://localhost:11434'
     return normalizeBaseUrl(providerConfigs?.ollama?.baseUrl, fallback)
@@ -147,6 +162,11 @@ export function useAgentSettingsState({
     const fallback = DEFAULT_PROVIDER_SETTINGS.openrouter.baseUrl ?? 'https://openrouter.ai/api/v1'
     return normalizeBaseUrl(providerConfigs?.openrouter?.baseUrl, fallback)
   }, [providerConfigs?.openrouter?.baseUrl])
+
+  const qdrantBaseUrl = useMemo(() => {
+    const fallback = DEFAULT_PROVIDER_SETTINGS.qdrant?.baseUrl ?? 'http://localhost:6333'
+    return normalizeBaseUrl(providerConfigs?.qdrant?.baseUrl, fallback)
+  }, [providerConfigs?.qdrant?.baseUrl])
 
   const handleAgentConfigChange = useCallback(
     <Field extends keyof AgentConfig>(
@@ -228,24 +248,12 @@ export function useAgentSettingsState({
   }, [fetchOpenAIModels])
 
   const fetchOllamaModels = useCallback(async () => {
-    const baseUrl = ollamaBaseUrl
-    if (!baseUrl) {
-      setOllamaError('Ollama base URL is not configured')
-      return
-    }
-
     setOllamaLoading(true)
     setOllamaError(null)
 
     try {
-      const response = await fetch(`${baseUrl}/api/tags`)
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status} when requesting models`)
-      }
-      const data = (await response.json()) as OllamaTagResponse
-      const models = (data.models ?? [])
-        .map(model => model.name?.trim())
-        .filter((name): name is string => Boolean(name))
+      configureAgentClient(providerConfigs ?? cloneProviderDefaults())
+      const { models } = await listOllamaModels()
       setOllamaModels(models)
     } catch (error) {
       console.error('Failed to fetch Ollama models', error)
@@ -253,7 +261,7 @@ export function useAgentSettingsState({
     } finally {
       setOllamaLoading(false)
     }
-  }, [ollamaBaseUrl])
+  }, [providerConfigs])
 
   const fetchOpenRouterModels = useCallback(async () => {
     const apiKey = providerConfigs?.openrouter?.apiKey
@@ -293,6 +301,25 @@ export function useAgentSettingsState({
     }
   }, [defaultReferer, openRouterBaseUrl, providerConfigs?.openrouter])
 
+  const probeQdrant = useCallback(async () => {
+    setQdrantLoading(true)
+    setQdrantMessage(null)
+
+    try {
+      configureAgentClient(providerConfigs ?? cloneProviderDefaults())
+      const result = await probeQdrantClient()
+      setQdrantStatus(result.status)
+      setQdrantMessage(result.message)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to reach Qdrant'
+      console.error('Failed to probe Qdrant', error)
+      setQdrantStatus('error')
+      setQdrantMessage(message)
+    } finally {
+      setQdrantLoading(false)
+    }
+  }, [providerConfigs])
+
   useEffect(() => {
     if (providerConfigs?.ollama?.baseUrl) {
       void fetchOllamaModels()
@@ -304,6 +331,15 @@ export function useAgentSettingsState({
       void fetchOpenRouterModels()
     }
   }, [providerConfigs?.openrouter?.apiKey, fetchOpenRouterModels])
+
+  useEffect(() => {
+    if (providerConfigs?.qdrant?.baseUrl) {
+      void probeQdrant()
+    } else {
+      setQdrantStatus('unknown')
+      setQdrantMessage(null)
+    }
+  }, [providerConfigs?.qdrant?.baseUrl, probeQdrant])
 
   const resetToDefaults = useCallback(() => {
     const defaultAgents = cloneAgentDefaults()
@@ -365,6 +401,11 @@ export function useAgentSettingsState({
     openRouterError,
     ollamaBaseUrl,
     openRouterBaseUrl,
+    qdrantBaseUrl,
+    qdrantStatus,
+    qdrantLoading,
+    qdrantMessage,
+    probeQdrant,
     handleAgentConfigChange,
     handleProviderConfigChange,
     handleAutonomousConfigChange,

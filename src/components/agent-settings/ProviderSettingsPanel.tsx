@@ -32,6 +32,13 @@ interface ProviderSettingsPanelProps {
     baseUrl: string
     modelCount: number
   }
+  qdrantState: {
+    baseUrl: string
+    status: 'unknown' | 'ready' | 'error'
+    loading: boolean
+    message: string | null
+    onProbe: () => Promise<void>
+  }
 }
 
 export function ProviderSettingsPanel({
@@ -43,7 +50,8 @@ export function ProviderSettingsPanel({
   fetchOpenRouterModels,
   openRouterState,
   fetchOllamaModels,
-  ollamaState
+  ollamaState,
+  qdrantState
 }: ProviderSettingsPanelProps) {
   return (
     <div className="space-y-6">
@@ -218,6 +226,73 @@ export function ProviderSettingsPanel({
           </div>
           <p className="text-xs text-muted-foreground">
             Ollama requests are issued directly from your browser. Ensure the host is accessible and CORS is enabled if connecting remotely.
+          </p>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Qdrant</CardTitle>
+          <p className="text-sm text-muted-foreground">
+            Configure the vector database endpoint used for semantic recall and memory storage.
+          </p>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <Label htmlFor="qdrant-base-url">Base URL</Label>
+              <Input
+                id="qdrant-base-url"
+                value={providerConfigs?.qdrant?.baseUrl || ''}
+                onChange={event => onProviderChange('qdrant', 'baseUrl', event.target.value)}
+                placeholder="http://localhost:6333"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="qdrant-api-key">API Key (optional)</Label>
+              <Input
+                id="qdrant-api-key"
+                type="password"
+                value={providerConfigs?.qdrant?.apiKey || ''}
+                onChange={event => onProviderChange('qdrant', 'apiKey', event.target.value)}
+                placeholder="Secret if your Qdrant instance requires authentication"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="qdrant-collection">Collection (optional)</Label>
+              <Input
+                id="qdrant-collection"
+                value={providerConfigs?.qdrant?.collection || ''}
+                onChange={event => onProviderChange('qdrant', 'collection', event.target.value)}
+                placeholder="physics-memory"
+              />
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => void qdrantState.onProbe()}
+              disabled={qdrantState.loading}
+            >
+              Verify connection
+            </Button>
+            <span
+              className={`text-xs ${
+                qdrantState.status === 'error' ? 'text-destructive' : 'text-muted-foreground'
+              }`}
+            >
+              {qdrantState.loading
+                ? 'Contacting Qdrant...'
+                : qdrantState.message
+                  ? qdrantState.message
+                  : qdrantState.status === 'ready'
+                    ? `Connected to ${qdrantState.baseUrl}`
+                    : 'Set the base URL and optionally collection name to enable vector storage.'}
+            </span>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Qdrant requests originate from your browser. Ensure the instance allows cross-origin access when hosting remotely.
           </p>
         </CardContent>
       </Card>

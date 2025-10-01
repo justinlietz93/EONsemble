@@ -3,6 +3,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { ArrowCounterClockwise, Brain } from '@phosphor-icons/react'
 import { PhysicsGoal, AgentResponse, KnowledgeEntry } from '@/App'
+import type { KVUpdater } from '@/hooks/useKV'
 import type { AutonomousConfig, AutonomousStopOptions } from '@/types/autonomous'
 import { DEFAULT_AUTONOMOUS_CONFIG } from '@/types/autonomous'
 import { AgentConfig, ProviderSettings, DEFAULT_PROVIDER_SETTINGS } from '@/types/agent'
@@ -11,13 +12,14 @@ import { toast } from 'sonner'
 import { useAutonomousEngine } from '@/components/AutonomousEngine'
 import { AgentStatusPanel } from '@/components/AgentStatusPanel'
 import { DerivationDisplay } from '@/components/DerivationDisplay'
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 
 interface AgentCollaborationProps {
   goal: PhysicsGoal | undefined
   derivationHistory: AgentResponse[]
-  setDerivationHistory: (updater: (prev: AgentResponse[]) => AgentResponse[]) => void
+  setDerivationHistory: (updater: KVUpdater<AgentResponse[]>) => void
   knowledgeBase: KnowledgeEntry[]
-  setKnowledgeBase: (updater: (prev: KnowledgeEntry[]) => KnowledgeEntry[]) => void
+  setKnowledgeBase: (updater: KVUpdater<KnowledgeEntry[]>) => void
 }
 
 export function AgentCollaboration({ 
@@ -64,7 +66,9 @@ export function AgentCollaboration({
     currentCycle,
     runSingleTurn,
     runContinuousLoop,
-    reset: resetAutonomousEngine
+    reset: resetAutonomousEngine,
+    runState,
+    runError
   } = useAutonomousEngine({
     goal: goal!,
     derivationHistory,
@@ -143,10 +147,6 @@ export function AgentCollaboration({
   const goalHistory = derivationHistory.filter(response => response.goalId === goal.id)
 
   const handleStartAutonomous = () => {
-    console.log('Starting autonomous mode...')
-    console.log('Agent configs:', agentConfigs)
-    console.log('Goal:', goal)
-
     if (!agentConfigs || agentConfigs.length === 0) {
       toast.error('No agent configurations found. Please check Agent Settings.')
       return
@@ -175,6 +175,15 @@ export function AgentCollaboration({
 
   return (
     <div className="space-y-6">
+      {runState === 'error' && runError && (
+        <Alert variant="destructive" data-testid="agent-run-error">
+          <AlertTitle>Agent run failed</AlertTitle>
+          <AlertDescription>
+            <p>{runError.message}</p>
+            {runError.hint && <p className="text-xs text-muted-foreground">{runError.hint}</p>}
+          </AlertDescription>
+        </Alert>
+      )}
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-2xl font-semibold">Agent Collaboration</h2>

@@ -138,6 +138,21 @@ curl -X POST http://localhost:4000/api/void/register \
 The bridge automatically materialises its JSON stores under `server/data/` and keeps the
 Void Dynamics state synchronised via `scripts/void_service.py`.
 
+### Remote Runtime Configuration
+
+- **Ollama** – open the *Agent Settings → Provider Credentials* tab and set the Ollama base URL to the host that exposes your
+  models. The UI trims trailing slashes, persists the value with `useKV`, and the "Refresh installed models" action validates
+  the remote endpoint without requiring a page reload.
+- **Qdrant** – the same panel now includes a Qdrant card with inputs for base URL, optional API key, and collection name. The
+  *Verify connection* button probes `/collections` so you can confirm connectivity and CORS headers when running Qdrant on a
+  separate machine.
+- **Environment defaults** – optionally export `VITE_OLLAMA_BASE_URL` and/or `VITE_QDRANT_BASE_URL` before `npm run dev` to prefill
+  the Provider Settings form with your remote endpoints. The values are sanitised (trimmed and de-suffixed) and stored as the
+  default fallback so fresh sessions immediately point to the correct hosts.
+- **Session diagnostics** – developers can toggle `localStorage.setItem('eon.debugSessionTrace', 'true')` (or rely on dev
+  mode defaults) to log tab resets and mount/unmount counts. The telemetry is stored on `window.__EONSessionTrace`, making it
+  easy to inspect unexpected navigation events without affecting production builds.
+
 ### Maintaining the OpenAI Catalog Snapshot
 
 The server opportunistically fetches models from the official OpenAI API whenever `OPENAI_API_KEY` is available.
