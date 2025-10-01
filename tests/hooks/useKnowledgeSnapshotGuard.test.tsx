@@ -17,6 +17,7 @@ const buildEntry = (id: string): KnowledgeEntry => ({
 describe('useKnowledgeSnapshotGuard', () => {
   beforeEach(() => {
     sessionStorage.clear()
+    localStorage.clear()
   })
 
   it('restores the last snapshot when the knowledge base unexpectedly becomes empty', () => {
@@ -84,6 +85,7 @@ describe('useKnowledgeSnapshotGuard', () => {
     })
 
     expect(JSON.parse(sessionStorage.getItem(storageKey) ?? '[]')).toHaveLength(1)
+    expect(JSON.parse(localStorage.getItem(`${storageKey}.local`) ?? '[]')).toHaveLength(1)
     unmount()
 
     const { result } = renderHook(() => {
@@ -125,6 +127,45 @@ describe('useKnowledgeSnapshotGuard', () => {
 
     return waitFor(() => {
       expect(sessionStorage.getItem(storageKey)).toBeNull()
+      expect(localStorage.getItem(`${storageKey}.local`)).toBeNull()
     })
+  })
+
+  it('restores the local snapshot backup on initial load when session storage is empty', async () => {
+    const storageKey = 'test.session.snapshot'
+    const initialEntries = [buildEntry('local-only')]
+
+    const { unmount } = renderHook(() => {
+      const [knowledge, setKnowledge] = useState<KnowledgeEntry[]>(initialEntries)
+      const kvSet = useCallback((updater: KVUpdater<KnowledgeEntry[]>) => {
+        setKnowledge(prev => (typeof updater === 'function' ? updater(prev) : updater))
+      }, [])
+
+      useKnowledgeSnapshotGuard(knowledge, kvSet, { storageKey })
+
+      return { knowledge }
+    })
+
+    unmount()
+
+    // Simulate a new tab: sessionStorage is empty, but the local backup remains.
+    sessionStorage.removeItem(storageKey)
+    expect(localStorage.getItem(`${storageKey}.local`)).not.toBeNull()
+
+    const { result } = renderHook(() => {
+      const [knowledge, setKnowledge] = useState<KnowledgeEntry[]>([])
+      const kvSet = useCallback((updater: KVUpdater<KnowledgeEntry[]>) => {
+        setKnowledge(prev => (typeof updater === 'function' ? updater(prev) : updater))
+      }, [])
+
+      useKnowledgeSnapshotGuard(knowledge, kvSet, { storageKey, restoreOnInitialLoad: true })
+
+      return { knowledge }
+    })
+
+    await waitFor(() => {
+      expect(result.current.knowledge).toHaveLength(1)
+    })
+    expect(result.current.knowledge[0]?.id).toBe('local-only')
   })
 })

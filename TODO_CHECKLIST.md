@@ -99,6 +99,30 @@
 - **Self-Critique**: The guard assumes that empty arrays are pathological unless flagged otherwise, which could block future
   "clear all" features. Mitigate by exposing an override predicate so deliberate clears can bypass restoration.
 
+### 2025-09-29 — Restore knowledge snapshots on fresh tabs using local backups
+- **Context**: Users still report losing uploaded knowledge after opening a new browser tab. The snapshot guard persists the
+  last payload to `sessionStorage`, but sessions are tab-scoped—new tabs start with an empty array and treat the initial state
+  as expected, so the guard does not restore. We need a cross-tab backup that allows the first render to repopulate knowledge
+  even before the persistence API responds.
+- **Options Considered**:
+  1. Mirror the snapshot into `localStorage` and expose a guard option that triggers restoration on the first render when a
+     backup exists.
+  2. Modify `detectUnexpectedKnowledgeDrop` so that any empty initial render is treated as unexpected, forcing restoration.
+  3. Add a UI "Restore previous knowledge" prompt when the app loads empty but a backup exists.
+  4. Move snapshot persistence to the backend and fetch it explicitly on boot.
+  5. Document the limitation and require users to export/import knowledge when opening additional tabs.
+- **Evaluation** (ranked by relevance & likelihood of success):
+  1. **Option 1** — Minimal scope, keeps restoration automatic, leverages existing guard infrastructure. *Rank: 1*.
+  2. **Option 3** — Transparent but adds UX friction and manual steps. *Rank: 2*.
+  3. **Option 2** — Simple but risks restoring during legitimate brand-new sessions with no prior uploads. *Rank: 3*.
+  4. **Option 4** — Requires backend changes and still fails offline. *Rank: 4*.
+  5. **Option 5** — Leaves the regression unresolved. *Rank: 5*.
+- **Selected Approach**: Option 1 — store a mirrored snapshot in `localStorage`, add a `restoreOnInitialLoad` flag to the guard,
+  and enable it in `App.tsx` so new tabs auto-recover before persistence replies.
+- **Self-Critique**: Local backups can become stale if intentional clears are introduced later. Mitigate by keeping
+  `isUnexpectedEmpty` overrides in place and documenting the behaviour so future "clear all" flows can disable the initial
+  restore when appropriate.
+
 ### 2025-09-30 — Restore knowledge after regressive hydration when mirrors vanish
 - **Context**: Real-world repros showed that when the browser mirror is cleared (for example via storage eviction or manual
   resets) the persistence API can respond with an empty knowledge payload and bypass the shrinkage guard because no local mirror
@@ -410,7 +434,7 @@
     7. [DONE] Introduce shrinkage-aware hydration guards so empty backend payloads cannot overwrite richer mirror data when metadata claims the writes succeeded. *(2025-09-29 Evening: Added `shouldAcceptHydration` predicate support to `useKV`, wired knowledge-base guard in `App.tsx`, and extended hook regressions with a shrinkage veto case.)*
     8. ✅ Ship a snapshot guard that restores the last non-empty knowledge payload when the rendered array unexpectedly clears after navigation. *(2025-09-29: Added `useKnowledgeSnapshotGuard`, wired it through `App.tsx`, and validated with focused hook tests.)*
     9. [DONE] Persist the guard snapshot to `sessionStorage` so remounts restore knowledge before the persistence API responds. *(2025-09-29 Evening: Updated `useKnowledgeSnapshotGuard` with a sessionStorage fallback, added guard + app wiring, and covered the behaviour with new hook tests.)*
-    10. [STARTED] Add a sessionStorage shadow mirror to `useKV` so knowledge survives transient localStorage misses and cross-tab races.
+    10. [DONE] Add a sessionStorage shadow mirror to `useKV` so knowledge survives transient localStorage misses and cross-tab races.
         - Acceptance Criteria:
           1. `useKV` hydrates from sessionStorage when localStorage is empty but a shadow copy exists, without triggering a default reset.
           2. Writes update both storage layers (best-effort) while keeping metadata parity so pending sync flags stay accurate.
@@ -438,6 +462,7 @@
   - Status Notes (2025-09-29 — Snapshot Guard): Implemented the in-app snapshot restoration hook with contextual diagnostics. Hook-level tests prove drop-to-zero states auto-heal while allowing explicit clears when flagged. Pending live validation before downgrading from `[RETRYING]`.
   - Status Notes (2025-09-29 — Session Snapshot Persistence): Session storage fallback implemented; `useKnowledgeSnapshotGuard` now persists the last non-empty payload and clears it when emptiness is intentional. Verified via `npm test -- --run tests/hooks/useKnowledgeSnapshotGuard.test.tsx` and `npm test -- --run tests/components/app.knowledge-persistence.test.tsx`.
   - Status Notes (2025-09-29 — Late Night Mirror Plan): New telemetry shows sporadic `localStorage` null hydrations during tab switches. Kicked off the sessionStorage shadow work inside `useKV`; diagnostics + regression tests pending before flipping this item to `[DONE]`.
+  - Status Notes (2025-09-29 — Cross-tab Snapshot Restore): The snapshot guard now mirrors backups into `localStorage` and auto-restores on initial load when a prior session existed. Validated via `npx vitest run tests/hooks/useKnowledgeSnapshotGuard.test.tsx`.
 - [DONE] Document and reproduce the hydration race where late-arriving persistence reads overwrite fresh local writes.
   - Decision Log (2025-09-29):
     1. Extend the existing RTL suite with a controllable fetch promise that resolves after a local corpus upload.

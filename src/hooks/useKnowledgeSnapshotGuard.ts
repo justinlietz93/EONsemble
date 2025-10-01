@@ -9,13 +9,28 @@ const cloneEntries = (entries: KnowledgeEntry[]): KnowledgeEntry[] =>
     tags: [...entry.tags]
   }))
 
-const readPersistedSnapshot = (storageKey: string): KnowledgeEntry[] | null => {
+const LOCAL_STORAGE_SUFFIX = '.local'
+
+const getStorage = (label: 'sessionStorage' | 'localStorage'): Storage | null => {
   if (typeof window === 'undefined') {
     return null
   }
 
   try {
-    const raw = window.sessionStorage?.getItem(storageKey)
+    return window[label] ?? null
+  } catch (error) {
+    console.warn(`[KnowledgeSnapshotGuard] Unable to access ${label}`, error)
+    return null
+  }
+}
+
+const readSnapshotFromStorage = (storage: Storage | null, key: string, label: string): KnowledgeEntry[] | null => {
+  if (!storage) {
+    return null
+  }
+
+  try {
+    const raw = storage.getItem(key)
     if (!raw) {
       return null
     }
@@ -32,32 +47,61 @@ const readPersistedSnapshot = (storageKey: string): KnowledgeEntry[] | null => {
         tags: Array.isArray(entry.tags) ? [...entry.tags] : []
       }))
   } catch (error) {
-    console.warn('[KnowledgeSnapshotGuard] Failed to parse persisted session snapshot', error)
+    console.warn(`[KnowledgeSnapshotGuard] Failed to parse persisted snapshot from ${label}`, error)
     return null
   }
 }
 
-const persistSnapshot = (storageKey: string, entries: KnowledgeEntry[]): void => {
-  if (typeof window === 'undefined') {
-    return
+const readPersistedSnapshot = (storageKey: string): KnowledgeEntry[] | null => {
+  const sessionStorage = getStorage('sessionStorage')
+  const sessionSnapshot = readSnapshotFromStorage(sessionStorage, storageKey, 'sessionStorage')
+  if (sessionSnapshot && sessionSnapshot.length > 0) {
+    return sessionSnapshot
   }
 
-  try {
-    window.sessionStorage?.setItem(storageKey, JSON.stringify(entries))
-  } catch (error) {
-    console.warn('[KnowledgeSnapshotGuard] Failed to persist session snapshot', error)
+  const localStorage = getStorage('localStorage')
+  return readSnapshotFromStorage(localStorage, `${storageKey}${LOCAL_STORAGE_SUFFIX}`, 'localStorage')
+}
+
+const persistSnapshot = (storageKey: string, entries: KnowledgeEntry[]): void => {
+  const serialized = JSON.stringify(entries)
+
+  const sessionStorage = getStorage('sessionStorage')
+  if (sessionStorage) {
+    try {
+      sessionStorage.setItem(storageKey, serialized)
+    } catch (error) {
+      console.warn('[KnowledgeSnapshotGuard] Failed to persist session snapshot', error)
+    }
+  }
+
+  const localStorage = getStorage('localStorage')
+  if (localStorage) {
+    try {
+      localStorage.setItem(`${storageKey}${LOCAL_STORAGE_SUFFIX}`, serialized)
+    } catch (error) {
+      console.warn('[KnowledgeSnapshotGuard] Failed to persist local snapshot backup', error)
+    }
   }
 }
 
 const clearPersistedSnapshot = (storageKey: string): void => {
-  if (typeof window === 'undefined') {
-    return
+  const sessionStorage = getStorage('sessionStorage')
+  if (sessionStorage) {
+    try {
+      sessionStorage.removeItem(storageKey)
+    } catch (error) {
+      console.warn('[KnowledgeSnapshotGuard] Failed to clear session snapshot', error)
+    }
   }
 
-  try {
-    window.sessionStorage?.removeItem(storageKey)
-  } catch (error) {
-    console.warn('[KnowledgeSnapshotGuard] Failed to clear session snapshot', error)
+  const localStorage = getStorage('localStorage')
+  if (localStorage) {
+    try {
+      localStorage.removeItem(`${storageKey}${LOCAL_STORAGE_SUFFIX}`)
+    } catch (error) {
+      console.warn('[KnowledgeSnapshotGuard] Failed to clear local snapshot backup', error)
+    }
   }
 }
 
@@ -75,6 +119,12 @@ type GuardOptions = {
    * Optional sessionStorage key used to persist the snapshot across component remounts.
    */
   storageKey?: string
+  /**
+   * When true, the guard attempts to restore the persisted snapshot during the first render
+   * even if the empty state has not yet been classified as unexpected. This is useful for new
+   * tabs that boot with an empty knowledge array but still have a local snapshot available.
+   */
+  restoreOnInitialLoad?: boolean
 }
 
 export function useKnowledgeSnapshotGuard(
@@ -90,6 +140,7 @@ export function useKnowledgeSnapshotGuard(
   const snapshotRef = useRef<KnowledgeEntry[]>([])
   const previousCountRef = useRef<number>(0)
   const initializedRef = useRef(false)
+  const initialRestorationAttemptedRef = useRef(false)
   if (!initializedRef.current) {
     if (Array.isArray(knowledgeBase) && knowledgeBase.length > 0) {
       snapshotRef.current = cloneEntries(knowledgeBase)
@@ -106,6 +157,7 @@ export function useKnowledgeSnapshotGuard(
   }
   const getContextRef = useRef<GuardOptions['getContext']>(options?.getContext)
   const isUnexpectedEmptyRef = useRef<GuardOptions['isUnexpectedEmpty']>(options?.isUnexpectedEmpty)
+  const restoreOnInitialLoadRef = useRef<boolean>(options?.restoreOnInitialLoad ?? false)
 
   if (getContextRef.current !== options?.getContext) {
     getContextRef.current = options?.getContext
@@ -115,8 +167,39 @@ export function useKnowledgeSnapshotGuard(
     isUnexpectedEmptyRef.current = options?.isUnexpectedEmpty
   }
 
+  if (restoreOnInitialLoadRef.current !== (options?.restoreOnInitialLoad ?? false)) {
+    restoreOnInitialLoadRef.current = options?.restoreOnInitialLoad ?? false
+  }
+
   useEffect(() => {
     const currentCount = Array.isArray(knowledgeBase) ? knowledgeBase.length : 0
+
+    const shouldAttemptInitialRestore =
+      restoreOnInitialLoadRef.current &&
+      !initialRestorationAttemptedRef.current &&
+      snapshotRef.current.length > 0
+
+    if (shouldAttemptInitialRestore) {
+      initialRestorationAttemptedRef.current = true
+
+      if (currentCount === 0) {
+        const snapshot = cloneEntries(snapshotRef.current)
+        setKnowledgeBase(prev => {
+          if (Array.isArray(prev) && prev.length > 0) {
+            return prev
+          }
+          return snapshot
+        })
+
+        if (storageKeyRef.current) {
+          persistSnapshot(storageKeyRef.current, snapshot)
+        }
+        previousCountRef.current = snapshot.length
+        return
+      }
+    } else if (!initialRestorationAttemptedRef.current) {
+      initialRestorationAttemptedRef.current = true
+    }
 
     if (Array.isArray(knowledgeBase) && knowledgeBase.length > 0) {
       const cloned = cloneEntries(knowledgeBase)

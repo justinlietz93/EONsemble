@@ -121,6 +121,12 @@ re-initialization, and collaboration history replay.
   guard with `isUnexpectedEmpty` returning `false`, which also wipes the stored
   snapshot. Validate by running
   `npx vitest run tests/hooks/useKnowledgeSnapshotGuard.test.tsx -t "restores the persisted session snapshot after a remount"` once the new test is added.
+- 2025-09-29 (cross-tab restore): The guard now mirrors the snapshot into
+  `localStorage` (`${storageKey}.local`) and exposes a `restoreOnInitialLoad`
+  flag. When a new tab loads with an empty knowledge array but a local backup
+  remains, the guard restores the snapshot immediately, ensuring the UI stays
+  populated before the persistence API responds. Validate with
+  `npx vitest run tests/hooks/useKnowledgeSnapshotGuard.test.tsx -t "restores the local snapshot backup on initial load when session storage is empty"`.
 - Late 2025-09-29 (storage reset repro): The guard predicate now delegates to
   `detectUnexpectedKnowledgeDrop`, which treats `persistence-reset` and
   `auto-restore` tab reasons (or a `lastDetectedReset` of `persistence-reset`)

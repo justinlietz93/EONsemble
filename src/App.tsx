@@ -219,7 +219,8 @@ function App() {
   useKnowledgeSnapshotGuard(knowledgeBase, setKnowledgeBase, {
     isUnexpectedEmpty: isUnexpectedKnowledgeEmpty,
     getContext: knowledgeRestorationContext,
-    storageKey: KNOWLEDGE_SNAPSHOT_STORAGE_KEY
+    storageKey: KNOWLEDGE_SNAPSHOT_STORAGE_KEY,
+    restoreOnInitialLoad: true
   })
 
   useEffect(() => {
