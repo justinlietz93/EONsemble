@@ -84,6 +84,24 @@ const formatKnowledgeSample = (sample: SessionSnapshot['knowledgeSample']): stri
   return `[${entries.join(', ')}${suffix}]`
 }
 
+const areSamplesEquivalent = (
+  left: SessionSnapshot['knowledgeSample'],
+  right: SessionSnapshot['knowledgeSample']
+): boolean => {
+  if (left.length !== right.length) {
+    return false
+  }
+
+  return left.every((entry, index) => {
+    const counterpart = right[index]
+    if (!counterpart) {
+      return false
+    }
+
+    return entry.id === counterpart.id && entry.title === counterpart.title
+  })
+}
+
 export function useSessionDiagnostics(
   activeTab: string,
   snapshot: SessionSnapshot,
@@ -92,6 +110,7 @@ export function useSessionDiagnostics(
   const previousTab = useRef<string>('')
   const latestSnapshot = useRef<SessionSnapshot>(snapshot)
   const latestMetadata = useRef<SessionMetadata>({})
+  const previousSnapshotRef = useRef<SessionSnapshot>(snapshot)
 
   useEffect(() => {
     latestSnapshot.current = snapshot
@@ -173,4 +192,32 @@ export function useSessionDiagnostics(
 
     previousTab.current = activeTab
   }, [activeTab])
+
+  useEffect(() => {
+    if (!isDebugEnabled()) {
+      previousSnapshotRef.current = snapshot
+      return
+    }
+
+    const previousSnapshot = previousSnapshotRef.current
+    const metadataForLog = latestMetadata.current
+
+    if (previousSnapshot.knowledgeEntryCount !== snapshot.knowledgeEntryCount) {
+      const delta = snapshot.knowledgeEntryCount - previousSnapshot.knowledgeEntryCount
+      const direction = delta > 0 ? 'increased' : 'decreased'
+      const nextCount = snapshot.knowledgeEntryCount
+      const logMethod = delta > 0 ? console.info : console.warn
+      logMethod?.(
+        `[SessionTrace] Knowledge count ${direction} (${delta > 0 ? '+' : ''}${delta}) -> ${nextCount} | tab=${activeTab} | ` +
+          `reason=${formatReason(metadataForLog.tabChangeReason)} | lastReset=${formatLastReset(metadataForLog.lastDetectedReset)} | sample=${formatKnowledgeSample(snapshot.knowledgeSample)}`
+      )
+    } else if (!areSamplesEquivalent(previousSnapshot.knowledgeSample, snapshot.knowledgeSample)) {
+      console.info?.(
+        `[SessionTrace] Knowledge sample changed at stable count (${snapshot.knowledgeEntryCount}) | tab=${activeTab} | ` +
+          `reason=${formatReason(metadataForLog.tabChangeReason)} | lastReset=${formatLastReset(metadataForLog.lastDetectedReset)} | sample=${formatKnowledgeSample(snapshot.knowledgeSample)}`
+      )
+    }
+
+    previousSnapshotRef.current = snapshot
+  }, [activeTab, snapshot])
 }

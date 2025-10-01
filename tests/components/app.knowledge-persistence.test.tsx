@@ -527,6 +527,144 @@ describe('Knowledge base persistence behaviour', () => {
     })
   })
 
+  it('retains knowledge after navigating across collaboration and settings tabs during deferred uploads', async () => {
+    sessionStorage.setItem('eon.activeTab', 'knowledge')
+
+    const persistedStore = new Map<string, unknown>()
+
+    const statefulFetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input.toString()
+      const method = init?.method ?? 'GET'
+
+      if (url.includes('/api/state/')) {
+        const key = decodeURIComponent(url.split('/api/state/')[1] ?? '')
+
+        if (method === 'PUT') {
+          const body = typeof init?.body === 'string' ? init.body : ''
+          let value: unknown = null
+          try {
+            value = JSON.parse(body || '{}').value ?? null
+          } catch {
+            value = null
+          }
+          persistedStore.set(key, value)
+          return new Response(JSON.stringify({ value }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' }
+          })
+        }
+
+        if (method === 'GET') {
+          if (!persistedStore.has(key)) {
+            return new Response(JSON.stringify({ value: null }), {
+              status: 404,
+              headers: { 'Content-Type': 'application/json' }
+            })
+          }
+
+          return new Response(JSON.stringify({ value: persistedStore.get(key) ?? null }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' }
+          })
+        }
+      }
+
+      return buildFetchMock()(input, init)
+    })
+
+    vi.stubGlobal('fetch', statefulFetch)
+
+    const pendingReaders: Array<() => void> = []
+
+    class MultiTabFileReaderStub implements Partial<FileReader> {
+      public result: string | ArrayBuffer | null = null
+      public readyState = 1
+      public onload: ((this: FileReader, ev: ProgressEvent<FileReader>) => void) | null = null
+      public onerror: ((this: FileReader, ev: ProgressEvent<FileReader>) => void) | null = null
+
+      private emit(result: string | ArrayBuffer): void {
+        this.result = result
+        this.readyState = 2
+        if (this.onload) {
+          const event = {
+            target: { result }
+          } as ProgressEvent<FileReader>
+          this.onload.call(this as unknown as FileReader, event)
+        }
+      }
+
+      readAsText(blob: Blob): void {
+        const name = (blob as File).name ?? 'mock-file'
+        const text = `Deferred multi-tab content from ${name} `.repeat(8)
+        pendingReaders.push(() => this.emit(text))
+      }
+
+      readAsArrayBuffer(blob: Blob): void {
+        const buffer = new ArrayBuffer(8)
+        new Uint8Array(buffer).set([3, 6, 9, 12, 15, 18, 21, 24])
+        pendingReaders.push(() => this.emit(buffer))
+      }
+
+      abort(): void {}
+      addEventListener(): void {}
+      removeEventListener(): void {}
+      dispatchEvent(): boolean {
+        return true
+      }
+    }
+
+    vi.stubGlobal('FileReader', MultiTabFileReaderStub as unknown as typeof FileReader)
+
+    render(<App />)
+
+    const knowledgeHeading = await screen.findByRole('heading', { name: /knowledge base/i })
+    const knowledgeView = knowledgeHeading.closest('div')?.parentElement?.parentElement ?? document.body
+
+    const user = userEvent.setup()
+    const uploadTab = within(knowledgeView).getByRole('tab', { name: /upload corpus/i })
+    await user.click(uploadTab)
+
+    await waitFor(() => {
+      expect(document.getElementById('file-upload')).not.toBeNull()
+    })
+
+    const fileInput = document.getElementById('file-upload') as HTMLInputElement
+
+    const sampleFile = new File([
+      'Cross-tab persistence verification scenario '.repeat(20)
+    ], 'multi-tab.txt', { type: 'text/plain' })
+
+    await user.upload(fileInput, sampleFile)
+
+    const collaborationTab = screen.getByRole('tab', { name: /agent collaboration/i })
+    await user.click(collaborationTab)
+
+    const settingsTab = screen.getByRole('tab', { name: /agent settings/i })
+    await user.click(settingsTab)
+
+    const goalSetupTab = screen.getByRole('tab', { name: /goal setup/i })
+    await user.click(goalSetupTab)
+
+    pendingReaders.splice(0).forEach(run => run())
+
+    await waitFor(() => {
+      const stored = persistedStore.get('knowledge-base') as unknown[] | undefined
+      expect(Array.isArray(stored) && stored.length > 0).toBe(true)
+    })
+
+    const knowledgeTab = screen.getByRole('tab', { name: /knowledge base/i })
+    await user.click(knowledgeTab)
+
+    const reenteredHeading = await screen.findByRole('heading', { name: /knowledge base/i })
+    const reenteredView = reenteredHeading.closest('div')?.parentElement?.parentElement ?? document.body
+
+    await waitFor(() => {
+      expect(
+        within(reenteredView).getByText(/multi-tab.txt - section 1/i)
+      ).toBeInTheDocument()
+    })
+  })
+
   it('restores knowledge entries from the browser mirror when persistence fetches fail on reload', async () => {
     sessionStorage.setItem('eon.activeTab', 'knowledge')
 

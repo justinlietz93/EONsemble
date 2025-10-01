@@ -49,6 +49,31 @@ export interface ProviderSettings {
   qdrant: QdrantProviderSettings
 }
 
+const sanitizeBaseUrl = (value: string | undefined, fallback: string): string => {
+  if (!value) {
+    return fallback
+  }
+
+  const trimmed = value.trim()
+  if (trimmed.length === 0) {
+    return fallback
+  }
+
+  return trimmed.replace(/\/+$/u, '')
+}
+
+const resolveEnvBaseUrl = (key: 'VITE_OLLAMA_BASE_URL' | 'VITE_QDRANT_BASE_URL', fallback: string): string => {
+  try {
+    const envValue = (import.meta as ImportMeta | undefined)?.env?.[key]
+    return sanitizeBaseUrl(envValue, fallback)
+  } catch {
+    return fallback
+  }
+}
+
+const defaultOllamaBaseUrl = resolveEnvBaseUrl('VITE_OLLAMA_BASE_URL', 'http://localhost:11434')
+const defaultQdrantBaseUrl = resolveEnvBaseUrl('VITE_QDRANT_BASE_URL', 'http://localhost:6333')
+
 export const DEFAULT_PROVIDER_SETTINGS: ProviderSettings = {
   spark: {},
   openai: {
@@ -59,9 +84,9 @@ export const DEFAULT_PROVIDER_SETTINGS: ProviderSettings = {
     appName: 'Collaborative Physicist'
   },
   ollama: {
-    baseUrl: 'http://localhost:11434'
+    baseUrl: defaultOllamaBaseUrl
   },
   qdrant: {
-    baseUrl: 'http://localhost:6333'
+    baseUrl: defaultQdrantBaseUrl
   }
 }

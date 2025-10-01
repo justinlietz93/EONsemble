@@ -127,4 +127,115 @@ describe('useSessionDiagnostics', () => {
       expect((resetCall?.[0] as string) ?? '').toContain('lastReset=persistence-reset')
     })
   })
+
+  it('logs knowledge deltas and sample updates across snapshots', async () => {
+    const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => {})
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    const { rerender } = render(
+      <Harness
+        tab="knowledge"
+        snapshot={{
+          activeGoalId: 'goal-xyz',
+          knowledgeEntryCount: 2,
+          knowledgeSample: [
+            { id: 'k-1', title: 'First' },
+            { id: 'k-2', title: 'Second' }
+          ]
+        }}
+        metadata={{
+          tabChangeReason: 'user-selection',
+          lastDetectedReset: 'none'
+        }}
+      />
+    )
+
+    await waitFor(() => {
+      expect(infoSpy).toHaveBeenCalled()
+    })
+
+    infoSpy.mockClear()
+
+    rerender(
+      <Harness
+        tab="knowledge"
+        snapshot={{
+          activeGoalId: 'goal-xyz',
+          knowledgeEntryCount: 5,
+          knowledgeSample: [
+            { id: 'k-1', title: 'First' },
+            { id: 'k-2', title: 'Second' },
+            { id: 'k-3', title: 'Third' }
+          ]
+        }}
+        metadata={{
+          tabChangeReason: 'user-selection',
+          lastDetectedReset: 'none'
+        }}
+      />
+    )
+
+    await waitFor(() => {
+      const increaseCall = infoSpy.mock.calls.find(([message]) =>
+        (message as string).includes('Knowledge count increased')
+      )
+      expect(increaseCall).toBeDefined()
+      expect((increaseCall?.[0] as string) ?? '').toContain('(+3)')
+      expect((increaseCall?.[0] as string) ?? '').toContain('-> 5')
+    })
+
+    rerender(
+      <Harness
+        tab="knowledge"
+        snapshot={{
+          activeGoalId: 'goal-xyz',
+          knowledgeEntryCount: 1,
+          knowledgeSample: [
+            { id: 'k-4', title: 'Replacement' }
+          ]
+        }}
+        metadata={{
+          tabChangeReason: 'persistence-reset',
+          lastDetectedReset: 'persistence-reset'
+        }}
+      />
+    )
+
+    await waitFor(() => {
+      const decreaseCall = warnSpy.mock.calls.find(([message]) =>
+        (message as string).includes('Knowledge count decreased')
+      )
+      expect(decreaseCall).toBeDefined()
+      expect((decreaseCall?.[0] as string) ?? '').toContain('-4')
+      expect((decreaseCall?.[0] as string) ?? '').toContain('-> 1')
+    })
+
+    warnSpy.mockClear()
+    infoSpy.mockClear()
+
+    rerender(
+      <Harness
+        tab="knowledge"
+        snapshot={{
+          activeGoalId: 'goal-xyz',
+          knowledgeEntryCount: 1,
+          knowledgeSample: [
+            { id: 'k-5', title: 'Shifted' }
+          ]
+        }}
+        metadata={{
+          tabChangeReason: 'user-selection',
+          lastDetectedReset: 'none'
+        }}
+      />
+    )
+
+    await waitFor(() => {
+      const sampleChangeCall = infoSpy.mock.calls.find(([message]) =>
+        (message as string).includes('Knowledge sample changed at stable count')
+      )
+      expect(sampleChangeCall).toBeDefined()
+      expect((sampleChangeCall?.[0] as string) ?? '').toContain('(1)')
+    })
+  })
 })

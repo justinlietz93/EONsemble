@@ -2,6 +2,35 @@
 
 ## Decision Log
 
+### 2025-09-29 — Knowledge Mirror Guard Still Loses Entries After Tab Switch
+- **Context**: The live app continues to drop the knowledge counter to zero immediately after switching away from and back to
+  the Knowledge tab, even after implementing the metadata-based mirror guard. This indicates either the guard is not covering
+  the real-world sequence (likely involving component unmount/mount cycles) or another consumer is clearing the state. We need
+  to reopen the investigation with explicit reproduction coverage and richer instrumentation before attempting a new fix.
+- **Options Considered**:
+  1. Extend the app-level regression suite with a realistic tab-switch harness that mounts/unmounts `<KnowledgeBase />` and
+     delays persistence hydration to mimic the live repro.
+  2. Add structured tracing inside `useKV` (and consumers like `KnowledgeBase`) to emit lifecycle events into the console and
+     session diagnostics, capturing when state is replaced, merged, or cleared.
+  3. Introduce a time-travel snapshot buffer that stores N previous `knowledge-base` states in memory so we can diff the last
+     good payload against the unexpected empty array for post-mortem analysis.
+  4. Prototype a lightweight IndexedDB adapter for `useKV` to validate whether synchronous `localStorage` is hitting limits or
+     throttling, causing mirror writes to fail silently in the browser.
+  5. Revert the metadata guard and rebuild with a simpler "prefer longest array" heuristic to see if complexity is hiding a
+     logic error.
+- **Evaluation** (ranked by relevance & likelihood of success):
+  1. **Option 1** — Deterministic reproduction in tests is the fastest path to understand the failing sequence. *Rank: 1*.
+  2. **Option 2** — Instrumentation complements tests and provides real user insight; requires careful log hygiene. *Rank: 2*.
+  3. **Option 3** — Helpful for audits but adds runtime overhead without directly surfacing the bug. *Rank: 3*.
+  4. **Option 4** — Valuable exploration but likely overkill before confirming the guard truly fails. *Rank: 4*.
+  5. **Option 5** — Simplifying heuristics risks reintroducing earlier races without guaranteeing a fix. *Rank: 5*.
+- **Selected Approach**: Option 1 — Build a high-fidelity regression that reproduces the tab-switch flow, then layer Option 2
+  instrumentation to capture runtime evidence if the automated test still passes. Treat Options 3–5 as fallbacks if the root
+  cause remains elusive.
+- **Self-Critique**: Leaning on additional tests may still miss environment-specific behaviour (e.g., sessionStorage restores).
+  Mitigate by wiring the new instrumentation into session diagnostics so manual repros emit actionable traces before attempting
+  riskier storage changes.
+
 ### 2025-09-29 — Knowledge Base Still Resets After Tab Switch
 - **Context**: Despite the hydration guard and regression suites, the user still sees the knowledge counter drop to zero after
   corpus uploads whenever they navigate away and back. The checklist must capture the reopened failure so we can treat the prior
@@ -138,7 +167,7 @@
 ---
 
 ## Knowledge Base Persistence Regression
-- [DONE] Guarantee knowledge entries survive tab switches even when persistence hydration returns `undefined`/`null` or
+- [RETRYING] Guarantee knowledge entries survive tab switches even when persistence hydration returns `undefined`/`null` or
   races ahead of local writes.
   - Decision Log (2025-09-29): Adopt the `localStorage` mirror approach captured in "Knowledge Base Tab Loss Reopening".
   - Acceptance Criteria:
@@ -148,11 +177,13 @@
     3. Unit tests cover hydration from the mirror store and verify that serialization failures surface as console warnings rather
        than crashes.
     4. Documentation (runbook or README) explains the fallback behaviour and outlines storage limits / troubleshooting.
-  - Next Steps:
+  - Reopened Action Plan (2025-09-29):
     1. ✅ Persist per-key sync metadata (last update + last successful persist) alongside the mirror and skip stale server hydration when pending writes exist. *(Completed 2025-09-29 via `useKV` metadata refs and adapter updates.)*
     2. ✅ Retry persistence writes automatically when hydration reveals the backend is missing the mirror payload, with diagnostic logging for repeated failures. *(Completed 2025-09-29 by invoking `pushToPersistence` during hydration when pending sync metadata is present.)*
     3. ✅ Expand the regression suite with a case where the server returns an empty array while the mirror retains entries, ensuring the UI keeps the mirror data. *(Completed 2025-09-29 through new hook + component tests.)*
     4. ✅ Amend documentation with the sync-metadata behaviour, storage format, and recovery commands. *(Completed 2025-09-29 in `docs/runbooks/memory-restore.md`.)*
+    5. ✅ Build a high-fidelity regression harness that reproduces the live tab-switch flow (mount/unmount + delayed hydration) to confirm the guard covers real-world timing. *(2025-09-29: Added cross-tab deferred upload regression in `tests/components/app.knowledge-persistence.test.tsx`.)*
+    6. ✅ Thread structured `knowledge-base` state change logs into `useSessionDiagnostics` to capture future regressions with contextual evidence. *(2025-09-29: Added knowledge delta/sample logging with expanded hook tests.)*
   - Strict Judge Checklist: Confirm no additional regressions in agentic operations (`AutonomousEngine` single + continuous run)
     after the persistence changes.
   - Implementation Options Review (2025-09-29):
@@ -168,6 +199,9 @@
     - Self-Critique: Adapter pattern adds indirection; must keep API minimal (`read`, `write`, `remove`) to avoid complexity.
   - Status Notes (2025-09-29): Reopened after observing that server hydration overwrites unsynced mirror data when the backend misses recent uploads. Metadata guard + retry loop pending. Tests need to reflect the stale-server scenario. Strict Judge review deferred until the metadata patch lands and agentic entry points are retested.
   - Status Notes (2025-09-29 — PM): Implemented the sync-metadata guard, automatic resubmission of mirror payloads, and adapter helpers for metadata storage. Added targeted regressions (`tests/hooks/useKV.test.tsx`, `tests/components/app.knowledge-sync.test.tsx`) plus reran the legacy persistence suite and screen smoke tests. Strict Judge Review: Verified agentic operations via `npx vitest run tests/components/screens.test.tsx` and ensured metadata-protected hydrations leave knowledge intact while reissuing persistence PUTs.
+  - Status Notes (2025-09-29 — Late PM Reopen): Live manual repro still empties knowledge after tab switches. Status set to `[RETRYING]` until the new regression harness fails pre-fix, passes post-fix, and diagnostics confirm no silent clears occur during navigation.
+  - Status Notes (2025-09-29 — Diagnostics): `useSessionDiagnostics` now emits console traces for knowledge count deltas and sample churn, guarding against silent resets. Hook tests cover increase/decrease/sample-change cases, giving observers richer breadcrumbs during manual repro.
+  - Status Notes (2025-09-29 — Regression Harness): Added `retains knowledge after navigating across collaboration and settings tabs during deferred uploads` to `tests/components/app.knowledge-persistence.test.tsx`, covering multi-tab unmount/mount cycles with delayed FileReader completion. The test currently passes, indicating the live failure likely stems from an environment-specific condition not yet modelled.
 - [DONE] Document and reproduce the hydration race where late-arriving persistence reads overwrite fresh local writes.
   - Decision Log (2025-09-29):
     1. Extend the existing RTL suite with a controllable fetch promise that resolves after a local corpus upload.
@@ -385,6 +419,7 @@
     - Self-Critique: Without a fully abstracted repository layer the threading approach may introduce coupling; mitigate by keeping the API boundaries clearly defined in follow-up commits.
   - Acceptance: Either functional integration or explicit no-op path with user-facing messaging when remote vector store unavailable.
   - Strict Review (2025-01-16): Checklist update keeps scope bounded (configuration threading + UX fallback) and documents residual coupling risk for follow-up mitigation.
+  - Status Notes (2025-09-29): Added environment-variable overrides (`VITE_OLLAMA_BASE_URL`, `VITE_QDRANT_BASE_URL`) that seed provider defaults without manual UI input, reducing friction when hosting runtimes on separate machines.
 - [NOT STARTED] Broaden automated coverage for Ollama/Qdrant settings persistence and validation logic beyond URL normalisation.
   - Acceptance: Component tests exercising form interactions and persistence writes.
 
