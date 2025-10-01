@@ -76,6 +76,22 @@ const shouldAcceptKnowledgeHydration: UseKVOptions<KnowledgeEntry[]>['shouldAcce
   return true
 }
 
+export const detectUnexpectedKnowledgeDrop = (
+  previousCount: number,
+  tabChangeReason: 'initial-load' | 'user-selection' | 'auto-restore' | 'persistence-reset',
+  lastDetectedReset: 'none' | 'persistence-reset' | 'restored'
+): boolean => {
+  if (previousCount > 0) {
+    return true
+  }
+
+  if (tabChangeReason === 'persistence-reset' || tabChangeReason === 'auto-restore') {
+    return true
+  }
+
+  return lastDetectedReset === 'persistence-reset'
+}
+
 function App() {
   const [activeTab, setActiveTab] = useKV<string>('active-tab', resolveInitialActiveTab)
   const [goals, setGoals] = useKV<PhysicsGoal[]>('physics-goals', [])
@@ -180,13 +196,22 @@ function App() {
     ? 'persistence-reset'
     : lastDetectedResetRef.current
 
-  const isUnexpectedKnowledgeEmpty = useCallback(() => previousKnowledgeCountRef.current > 0, [])
+  const isUnexpectedKnowledgeEmpty = useCallback(
+    () =>
+      detectUnexpectedKnowledgeDrop(
+        previousKnowledgeCountRef.current,
+        derivedTabChangeReason,
+        derivedLastDetectedReset
+      ),
+    [derivedLastDetectedReset, derivedTabChangeReason]
+  )
 
   const knowledgeRestorationContext = useCallback(
     () => ({
       activeTab,
       tabChangeReason: derivedTabChangeReason,
-      lastDetectedReset: derivedLastDetectedReset
+      lastDetectedReset: derivedLastDetectedReset,
+      previousKnowledgeCount: previousKnowledgeCountRef.current
     }),
     [activeTab, derivedLastDetectedReset, derivedTabChangeReason]
   )

@@ -1,7 +1,7 @@
 import '@testing-library/jest-dom/vitest'
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 
 import { useState } from 'react'
@@ -390,6 +390,52 @@ describe('Knowledge base persistence behaviour', () => {
     const entriesAfterSwitch = within(reenteredView).queryAllByText(/quantum-notes.txt - section 1/i)
 
     expect(entriesAfterSwitch.length).toBeGreaterThan(0)
+  })
+
+  it('restores knowledge when storage events force a persistence reset mid-session', async () => {
+    sessionStorage.setItem('eon.activeTab', 'knowledge')
+
+    const fetchMock = buildFetchMock()
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<App />)
+
+    const knowledgeHeading = await screen.findByRole('heading', { name: /knowledge base/i })
+    const knowledgeView = knowledgeHeading.closest('div')?.parentElement?.parentElement ?? document.body
+
+    const addTestDataButton = await within(knowledgeView).findByRole('button', { name: /add test data/i })
+    fireEvent.click(addTestDataButton)
+
+    await within(knowledgeView).findByText(/sample physics knowledge/i)
+
+    const knowledgeTab = screen.getByRole('tab', { name: /knowledge base/i })
+    await userEvent.click(knowledgeTab)
+
+    const dispatchStorageEvent = (key: string, newValue: string | null) => {
+      const event = new Event('storage') as StorageEvent
+      Object.defineProperties(event, {
+        key: { value: key },
+        newValue: { value: newValue },
+        storageArea: { value: window.localStorage }
+      })
+      window.dispatchEvent(event)
+    }
+
+    await act(async () => {
+      window.localStorage.setItem('eon.kv.active-tab', JSON.stringify('goal-setup'))
+      dispatchStorageEvent('eon.kv.active-tab', JSON.stringify('goal-setup'))
+    })
+
+    await act(async () => {
+      window.localStorage.setItem('eon.kv.knowledge-base', JSON.stringify([]))
+      dispatchStorageEvent('eon.kv.knowledge-base', JSON.stringify([]))
+    })
+
+    await waitFor(() => {
+      const restoredHeading = screen.getByRole('heading', { name: /knowledge base/i })
+      const restoredView = restoredHeading.closest('div')?.parentElement?.parentElement ?? document.body
+      expect(within(restoredView).getByText(/sample physics knowledge/i)).toBeInTheDocument()
+    })
   })
 
   it('restores knowledge after regressive hydration when local mirrors are unavailable', async () => {

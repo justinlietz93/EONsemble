@@ -2,6 +2,23 @@
 
 ## Decision Log
 
+### 2025-09-29 — Guard snapshot restores when persistence resets pre-empt count tracking
+- **Context**: Storage-event repros revealed a narrow race where the active tab flips to `goal-setup` before `previousKnowledgeCountRef` updates, so the knowledge snapshot guard sees a zero-length prior count and assumes the empty state is intentional. The user still observes "0 knowledge entries" after corpus uploads when persistence emits reset events, because the guard declines to restore.
+- **Options Considered**:
+  1. Export a helper that treats persistence-reset/auto-restore tab reasons as unexpected knowledge drops even when the previous count is zero, and reuse it wherever the guard predicate is evaluated.
+  2. Push additional context into `useKnowledgeSnapshotGuard` so it inspects `tabChangeReason` itself instead of relying on the predicate supplied by `<App />`.
+  3. Track the previous non-empty length inside `useKV` metadata and expose it to consumers, letting `<App />` compute the guard decision without relying on refs that can be reset early.
+  4. Emit a custom event when the storage listener applies a regressive payload so the guard can subscribe and restore immediately.
+  5. Disable automatic storage event handling for the knowledge key, forcing the UI to rehydrate manually instead of accepting regressive updates.
+- **Evaluation** (ranked by relevance & likelihood of success):
+  1. **Option 1** — Minimal scope, keeps logic colocated with the existing predicate, and is straightforward to unit test. *Rank: 1*.
+  2. **Option 3** — Accurate but adds cross-layer coupling between `useKV` metadata and knowledge-specific logic. *Rank: 2*.
+  3. **Option 2** — Centralises reasoning but bloats the guard hook API and forces cross-cutting knowledge about tab semantics. *Rank: 3*.
+  4. **Option 4** — Works but complicates event routing and risks duplicated restores. *Rank: 4*.
+  5. **Option 5** — Avoids the race but reintroduces stale mirrors on legitimate updates. *Rank: 5*.
+- **Selected Approach**: Option 1 — add a `detectUnexpectedKnowledgeDrop` helper in `App.tsx`, expand the guard predicate to consult it, and exercise the new logic with both unit and integration coverage.
+- **Self-Critique**: The helper still relies on heuristics (tab reasons + last reset state). If future flows introduce new reset reasons the predicate might need another update; documentation now emphasises keeping the helper in sync with guard semantics.
+
 ### 2025-09-29 — Dual-layer browser mirror for resilient knowledge persistence
 - **Context**: Despite the existing `localStorage` mirror and snapshot guard, live repros still show the knowledge counter
   dropping to zero after navigating away from the Knowledge tab. Session traces reveal that the regression correlates with
@@ -623,6 +640,22 @@
   runbook and checklist.
   - Status Notes (2025-09-29): Runbook appendix updated with the chunking behaviour and associated Vitest command; checklist now
     references the new regression.
+
+## Knowledge Snapshot Guard Resilience
+- [DONE] Ensure storage-driven persistence resets still trigger snapshot restoration even when the previous count ref already
+  reports zero.
+  - Acceptance: Guard predicate accounts for `persistence-reset`/`auto-restore` tab reasons and last-reset metadata so the
+    knowledge snapshot returns immediately after storage events.
+  - Evaluation: New unit coverage in `tests/components/app.knowledge-drop.logic.test.ts` validates the helper logic; the RTL
+    regression in `tests/components/app.knowledge-persistence.test.tsx` simulates storage events and asserts the entries remain
+    visible.
+  - Status Notes (2025-09-29): Added `detectUnexpectedKnowledgeDrop`, updated the guard predicate wiring, and documented the
+    heuristics in the runbook. The new integration test dispatches `storage` events for both the active tab and knowledge key to
+    prove the guard fires under the reported repro.
+  - Strict Judge Review (2025-09-29): Ran `npm run test -- --run tests/components/app.knowledge-drop.logic.test.ts` and `npm run
+    test -- --run tests/components/app.knowledge-persistence.test.tsx -t "restores knowledge when storage events force a
+    persistence reset mid-session"` to verify the helper and end-to-end behaviour. Also re-ran `tests/components/screens.test.tsx`
+    to confirm agentic flows stay green post-change.
 
 ---
 

@@ -121,6 +121,13 @@ re-initialization, and collaboration history replay.
   guard with `isUnexpectedEmpty` returning `false`, which also wipes the stored
   snapshot. Validate by running
   `npx vitest run tests/hooks/useKnowledgeSnapshotGuard.test.tsx -t "restores the persisted session snapshot after a remount"` once the new test is added.
+- Late 2025-09-29 (storage reset repro): The guard predicate now delegates to
+  `detectUnexpectedKnowledgeDrop`, which treats `persistence-reset` and
+  `auto-restore` tab reasons (or a `lastDetectedReset` of `persistence-reset`)
+  as unexpected knowledge loss even if the previous-count ref has already been
+  cleared. Cover this with
+  `npx vitest run tests/components/app.knowledge-drop.logic.test.ts` and
+  `npx vitest run tests/components/app.knowledge-persistence.test.tsx -t "restores knowledge when storage events force a persistence reset mid-session"`.
 - When investigating suspected regressions, reproduce the offline scenario by
   mocking `fetchPersistedValue` to resolve `undefined` and verify that
   previously added entries remain visible.
