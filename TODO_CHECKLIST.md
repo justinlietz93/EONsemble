@@ -809,6 +809,9 @@
     `agentClient` configuration before issuing refresh/probe actions.
   - Strict Review (2025-09-30): `npm run test -- --run tests/components/agent-settings.provider-settings.test.tsx` exercises the
     new scenarios and confirms persistence writes plus probe flows execute without regressions.
+  - Status Notes (2025-09-30 Late): Hardened the regression by restoring the original `localStorage`/`sessionStorage`
+    descriptors after each run to prevent leakage into neighbouring suites and by guarding Qdrant snapshot assertions with
+    optional chaining so predicate checks remain resilient when defaults omit the provider block.
 
 ---
 

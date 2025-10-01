@@ -67,7 +67,13 @@ beforeAll(async () => {
 })
 
 describe('AgentSettings provider persistence', () => {
+  let originalLocalStorageDescriptor: PropertyDescriptor | undefined
+  let originalSessionStorageDescriptor: PropertyDescriptor | undefined
+
   beforeEach(() => {
+    originalLocalStorageDescriptor = Object.getOwnPropertyDescriptor(window, 'localStorage')
+    originalSessionStorageDescriptor = Object.getOwnPropertyDescriptor(window, 'sessionStorage')
+
     persistedStore.clear()
     listOllamaModelsMock.mockReset()
     probeQdrantMock.mockReset()
@@ -112,6 +118,13 @@ describe('AgentSettings provider persistence', () => {
   })
 
   afterEach(() => {
+    if (originalLocalStorageDescriptor) {
+      Object.defineProperty(window, 'localStorage', originalLocalStorageDescriptor)
+    }
+    if (originalSessionStorageDescriptor) {
+      Object.defineProperty(window, 'sessionStorage', originalSessionStorageDescriptor)
+    }
+
     vi.clearAllMocks()
   })
 
@@ -204,7 +217,9 @@ describe('AgentSettings provider persistence', () => {
 
     await waitFor(() => {
       expect(
-        findPersistedSnapshot(value => value.qdrant.baseUrl === undefined && value.qdrant.apiKey === undefined)
+        findPersistedSnapshot(
+          value => value.qdrant?.baseUrl === undefined && value.qdrant?.apiKey === undefined
+        )
       ).not.toBeNull()
     })
 
