@@ -2,6 +2,30 @@
 
 ## Decision Log
 
+### 2025-09-29 — Restore knowledge snapshot after unexpected tab-driven resets
+- **Context**: Manual QA continues to show the knowledge counter dropping to zero immediately after tab switches, even though
+  uploads succeed and mirrors persist entries. Instrumentation indicates the state occasionally becomes an empty array without
+  a corresponding delete action, likely due to race conditions between tab-driven remounts and hydration side-effects. We need
+  an automatic guard that restores the last good snapshot while still allowing intentional clears.
+- **Options Considered**:
+  1. Introduce a snapshot guard hook that caches the last non-empty knowledge payload in-memory and restores it whenever the
+     rendered array unexpectedly becomes empty.
+  2. Patch every knowledge consumer to detect empty payloads and manually reload from persistence before rendering.
+  3. Add a reconciliation effect in `useKV` that compares current state with a browser-mirror snapshot on every render and
+     silently rewrites state when the mirror is larger.
+  4. Prompt the user when the knowledge array shrinks to zero, offering a one-click restore from the previous snapshot.
+  5. Rely solely on server persistence by forcing a blocking refetch before tab switches complete, ignoring local mirrors.
+- **Evaluation** (ranked by relevance & likelihood of success):
+  1. **Option 1** — Localised, testable, and keeps domain heuristics near the knowledge workflow. *Rank: 1*.
+  2. **Option 3** — Broad coverage but runs on every render and risks feedback loops inside `useKV`. *Rank: 2*.
+  3. **Option 4** — Transparent but interrupts UX and slows recovery. *Rank: 3*.
+  4. **Option 2** — Duplicates logic across components, increasing maintenance cost. *Rank: 4*.
+  5. **Option 5** — Heavy-handed, introduces latency, and still fails if the backend remains empty. *Rank: 5*.
+- **Selected Approach**: Option 1 — build `useKnowledgeSnapshotGuard` to capture the last non-empty array, restore it when a
+  drop-to-zero occurs without an intentional clear, and log diagnostics with tab/reset context.
+- **Self-Critique**: The guard assumes that empty arrays are pathological unless flagged otherwise, which could block future
+  "clear all" features. Mitigate by exposing an override predicate so deliberate clears can bypass restoration.
+
 ### 2025-09-30 — Restore knowledge after regressive hydration when mirrors vanish
 - **Context**: Real-world repros showed that when the browser mirror is cleared (for example via storage eviction or manual
   resets) the persistence API can respond with an empty knowledge payload and bypass the shrinkage guard because no local mirror
@@ -265,6 +289,7 @@
     5. ✅ Build a high-fidelity regression harness that reproduces the live tab-switch flow (mount/unmount + delayed hydration) to confirm the guard covers real-world timing. *(2025-09-29: Added cross-tab deferred upload regression in `tests/components/app.knowledge-persistence.test.tsx`.)*
     6. ✅ Thread structured `knowledge-base` state change logs into `useSessionDiagnostics` to capture future regressions with contextual evidence. *(2025-09-29: Added knowledge delta/sample logging with expanded hook tests.)*
     7. [DONE] Introduce shrinkage-aware hydration guards so empty backend payloads cannot overwrite richer mirror data when metadata claims the writes succeeded. *(2025-09-29 Evening: Added `shouldAcceptHydration` predicate support to `useKV`, wired knowledge-base guard in `App.tsx`, and extended hook regressions with a shrinkage veto case.)*
+    8. ✅ Ship a snapshot guard that restores the last non-empty knowledge payload when the rendered array unexpectedly clears after navigation. *(2025-09-29: Added `useKnowledgeSnapshotGuard`, wired it through `App.tsx`, and validated with focused hook tests.)*
   - Strict Judge Checklist: Confirm no additional regressions in agentic operations (`AutonomousEngine` single + continuous run)
     after the persistence changes. *(2025-09-30: Verified by rerunning `npm run test -- --run tests/components/screens.test.tsx`
     following the replay updates.)*
@@ -284,6 +309,7 @@
   - Status Notes (2025-09-29 — Late PM Reopen): Live manual repro still empties knowledge after tab switches. Status set to `[RETRYING]` until the new regression harness fails pre-fix, passes post-fix, and diagnostics confirm no silent clears occur during navigation.
   - Status Notes (2025-09-29 — Diagnostics): `useSessionDiagnostics` now emits console traces for knowledge count deltas and sample churn, guarding against silent resets. Hook tests cover increase/decrease/sample-change cases, giving observers richer breadcrumbs during manual repro.
   - Status Notes (2025-09-29 — Regression Harness): Added `retains knowledge after navigating across collaboration and settings tabs during deferred uploads` to `tests/components/app.knowledge-persistence.test.tsx`, covering multi-tab unmount/mount cycles with delayed FileReader completion. The test currently passes, indicating the live failure likely stems from an environment-specific condition not yet modelled.
+  - Status Notes (2025-09-29 — Snapshot Guard): Implemented the in-app snapshot restoration hook with contextual diagnostics. Hook-level tests prove drop-to-zero states auto-heal while allowing explicit clears when flagged. Pending live validation before downgrading from `[RETRYING]`.
 - [DONE] Document and reproduce the hydration race where late-arriving persistence reads overwrite fresh local writes.
   - Decision Log (2025-09-29):
     1. Extend the existing RTL suite with a controllable fetch promise that resolves after a local corpus upload.

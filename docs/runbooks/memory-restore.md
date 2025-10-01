@@ -104,6 +104,13 @@ re-initialization, and collaboration history replay.
   the server. See `tests/hooks/useKV.test.tsx` (`rejects shrinkage-only hydration`)
   once added, or the knowledge base configuration in `src/App.tsx` for a working
   example.
+- Late 2025-09-29: `App.tsx` layers `useKnowledgeSnapshotGuard` atop the knowledge
+  store to cache the last non-empty payload. If navigation or hydration races
+  render the knowledge array empty while a snapshot exists, the guard restores
+  the cached entries and logs the associated tab/reset context. Override
+  `isUnexpectedEmpty` when building a future "clear all" workflow to avoid
+  automatic restoration. Validate via
+  `npx vitest run tests/hooks/useKnowledgeSnapshotGuard.test.tsx`.
 - When investigating suspected regressions, reproduce the offline scenario by
   mocking `fetchPersistedValue` to resolve `undefined` and verify that
   previously added entries remain visible.

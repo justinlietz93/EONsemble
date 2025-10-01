@@ -10,6 +10,7 @@ import { DerivationHistory } from '@/components/DerivationHistory'
 import { AgentSettings } from '@/components/AgentSettings'
 import { useVoidMemoryBridge } from '@/hooks/useVoidMemoryBridge'
 import { useSessionDiagnostics } from '@/hooks/useSessionDiagnostics'
+import { useKnowledgeSnapshotGuard } from '@/hooks/useKnowledgeSnapshotGuard'
 
 const SESSION_TAB_KEY = 'eon.activeTab'
 
@@ -177,6 +178,22 @@ function App() {
   const derivedLastDetectedReset = unexpectedReset
     ? 'persistence-reset'
     : lastDetectedResetRef.current
+
+  const isUnexpectedKnowledgeEmpty = useCallback(() => previousKnowledgeCountRef.current > 0, [])
+
+  const knowledgeRestorationContext = useCallback(
+    () => ({
+      activeTab,
+      tabChangeReason: derivedTabChangeReason,
+      lastDetectedReset: derivedLastDetectedReset
+    }),
+    [activeTab, derivedLastDetectedReset, derivedTabChangeReason]
+  )
+
+  useKnowledgeSnapshotGuard(knowledgeBase, setKnowledgeBase, {
+    isUnexpectedEmpty: isUnexpectedKnowledgeEmpty,
+    getContext: knowledgeRestorationContext
+  })
 
   useEffect(() => {
     const previousCount = previousKnowledgeCountRef.current
