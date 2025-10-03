@@ -233,4 +233,25 @@ describe('AgentSettings provider persistence', () => {
       )
     ).toBeInTheDocument()
   })
+
+  it('keeps the Provider Credentials tab active while editing inputs', async () => {
+    const user = userEvent.setup()
+
+    render(<AgentSettings />)
+
+    const providerTab = screen.getByRole('tab', { name: /provider credentials/i })
+    await user.click(providerTab)
+
+    const collectionInput = screen.getByLabelText('Collection (optional)', {
+      selector: 'input#qdrant-collection'
+    })
+
+    for (const character of 'EONsemble') {
+      await user.type(collectionInput, character)
+      expect(providerTab).toHaveAttribute('data-state', 'active')
+      expect(providerTab).toHaveAttribute('aria-selected', 'true')
+    }
+
+    expect(collectionInput).toHaveValue('EONsemble')
+  })
 })
