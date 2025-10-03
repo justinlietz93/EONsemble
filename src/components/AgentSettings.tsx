@@ -1,9 +1,10 @@
-import { useState, useCallback } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { Gear, Robot, Lightning } from '@phosphor-icons/react'
 import { toast } from 'sonner'
 
 import { Button } from '@/components/ui/button'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { useKV } from '@/hooks/useKV'
 import type { AgentConfig } from '@/types/agent'
 import type { AutonomousConfig } from '@/types/autonomous'
 import { DEFAULT_AUTONOMOUS_CONFIG } from '@/types/autonomous'
@@ -13,13 +14,38 @@ import { AutonomousSettingsPanel } from './agent-settings/AutonomousSettingsPane
 import { ProviderSettingsPanel } from './agent-settings/ProviderSettingsPanel'
 import { useAgentSettingsState } from './agent-settings/useAgentSettingsState'
 
+const SETTINGS_TABS = ['agents', 'providers', 'autonomous'] as const
+type SettingsTab = (typeof SETTINGS_TABS)[number]
+
+const isSettingsTab = (value: string): value is SettingsTab =>
+  SETTINGS_TABS.includes(value as SettingsTab)
+
 interface AgentSettingsProps {
   onConfigChange?: (configs: AgentConfig[]) => void
   onAutonomousChange?: (config: AutonomousConfig) => void
 }
 
 export function AgentSettings({ onConfigChange, onAutonomousChange }: AgentSettingsProps) {
-  const [activeSettingsTab, setActiveSettingsTab] = useState('agents')
+  const [persistedSettingsTab, setPersistedSettingsTab] = useKV<string>(
+    'agent-settings.activeTab',
+    'agents'
+  )
+  const [activeSettingsTab, setActiveSettingsTab] = useState<SettingsTab>(() =>
+    isSettingsTab(persistedSettingsTab) ? persistedSettingsTab : 'agents'
+  )
+
+  useEffect(() => {
+    if (!isSettingsTab(persistedSettingsTab)) {
+      if (persistedSettingsTab !== 'agents') {
+        setPersistedSettingsTab('agents')
+      }
+      return
+    }
+
+    setActiveSettingsTab(current =>
+      current === persistedSettingsTab ? current : persistedSettingsTab
+    )
+  }, [persistedSettingsTab, setActiveSettingsTab, setPersistedSettingsTab])
 
   const {
     agentConfigs,
@@ -56,6 +82,18 @@ export function AgentSettings({ onConfigChange, onAutonomousChange }: AgentSetti
     toast.info('Autonomous mode can be started from the Collaboration tab')
   }, [])
 
+  const handleSettingsTabChange = useCallback(
+    (nextTab: string) => {
+      if (isSettingsTab(nextTab)) {
+        setActiveSettingsTab(nextTab)
+        if (persistedSettingsTab !== nextTab) {
+          setPersistedSettingsTab(nextTab)
+        }
+      }
+    },
+    [persistedSettingsTab, setActiveSettingsTab, setPersistedSettingsTab]
+  )
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -75,7 +113,7 @@ export function AgentSettings({ onConfigChange, onAutonomousChange }: AgentSetti
         </div>
       </div>
 
-      <Tabs value={activeSettingsTab} onValueChange={setActiveSettingsTab} className="space-y-6">
+      <Tabs value={activeSettingsTab} onValueChange={handleSettingsTabChange} className="space-y-6">
         <TabsList className="grid w-full grid-cols-3">
           <TabsTrigger value="agents" className="flex items-center gap-2">
             <Robot className="h-4 w-4" />
