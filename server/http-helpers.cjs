@@ -1,4 +1,13 @@
-const DEFAULT_MAX_BODY_SIZE = 1024 * 1024
+const DEFAULT_MAX_BODY_SIZE = 5 * 1024 * 1024
+
+class BodySizeLimitError extends Error {
+  constructor(limit) {
+    super('Request body exceeded limit')
+    this.name = 'BodySizeLimitError'
+    this.statusCode = 413
+    this.limit = limit
+  }
+}
 
 const sendJson = (res, status, payload) => {
   res.writeHead(status, {
@@ -39,7 +48,7 @@ const readBody = (req, options = {}) =>
 
       if (totalBytes > maxBytes) {
         cleanup()
-        reject(new Error('Request body exceeded limit'))
+        reject(new BodySizeLimitError(maxBytes))
         return
       }
 
@@ -59,6 +68,7 @@ const readBody = (req, options = {}) =>
 
 module.exports = {
   DEFAULT_MAX_BODY_SIZE,
+  BodySizeLimitError,
   readBody,
   sendJson
 }
