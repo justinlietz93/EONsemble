@@ -1,6 +1,6 @@
 const http = require('http')
 
-const { readBody, sendJson } = require('./http-helpers.cjs')
+const { BodySizeLimitError, readBody, sendJson } = require('./http-helpers.cjs')
 const { mergeManagerConfig, isPlainObject } = require('./manager-config.cjs')
 const { loadOpenAIModelCatalog, readBundledOpenAIModelCatalog } = require('./openai-catalog.cjs')
 const { readData, writeData } = require('./persistence-store.cjs')
@@ -42,7 +42,11 @@ const handleStateRequest = async (req, res, key) => {
       sendJson(res, 200, { value: data[key] })
     } catch (error) {
       console.error('Failed to persist value', error)
-      sendJson(res, 400, { error: 'Invalid JSON payload' })
+      if (error instanceof BodySizeLimitError) {
+        sendJson(res, error.statusCode, { error: error.message })
+      } else {
+        sendJson(res, 400, { error: 'Invalid JSON payload' })
+      }
     }
     return
   }
@@ -96,6 +100,10 @@ const handleVoidRegister = async (req, res) => {
     sendJson(res, 200, result)
   } catch (error) {
     console.error('Void manager integration error', error)
+    if (error instanceof BodySizeLimitError) {
+      sendJson(res, error.statusCode, { error: error.message })
+      return
+    }
     sendJson(res, 500, { error: 'Void manager integration failed' })
   }
 }
